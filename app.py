@@ -583,6 +583,84 @@ def category_hover_lines_for_module(ann: pd.Series, ad_threshold: float) -> list
     return lines
 
 
+def add_network_legend(
+    fig: go.Figure,
+    nodes: pd.DataFrame,
+    graph: nx.DiGraph,
+    category: str | None,
+    is_gene_level: bool,
+    marked_ids: set[int],
+) -> None:
+    if is_gene_level:
+        if any(attrs["is_phenotype"] for _, attrs in graph.nodes(data=True)):
+            fig.add_trace(
+                go.Scatter(
+                    x=[None],
+                    y=[None],
+                    mode="markers",
+                    marker=dict(size=12, color=TISSUE_COLORS["phenotype"], symbol="diamond"),
+                    name="Phenotype",
+                    hoverinfo="skip",
+                )
+            )
+        for tissue in available_tissues(nodes):
+            fig.add_trace(
+                go.Scatter(
+                    x=[None],
+                    y=[None],
+                    mode="markers",
+                    marker=dict(size=12, color=TISSUE_COLORS.get(tissue, TISSUE_COLORS["default"])),
+                    name=f"Gene tissue: {tissue}",
+                    hoverinfo="skip",
+                )
+            )
+    else:
+        if any(str(attrs["pretty"]).startswith(("M", "ME_")) for _, attrs in graph.nodes(data=True)):
+            fig.add_trace(
+                go.Scatter(
+                    x=[None],
+                    y=[None],
+                    mode="markers",
+                    marker=dict(size=12, color=TISSUE_COLORS["tissue_specific_cluster"]),
+                    name="Tissue specific module",
+                    hoverinfo="skip",
+                )
+            )
+            fig.add_trace(
+                go.Scatter(
+                    x=[None],
+                    y=[None],
+                    mode="markers",
+                    marker=dict(size=12, color=TISSUE_COLORS["cross_tissue_cluster"]),
+                    name="Cross tissue module",
+                    hoverinfo="skip",
+                )
+            )
+
+    if category:
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="markers",
+                marker=dict(size=12, color=TISSUE_COLORS["highlight"], line=dict(width=2, color=TISSUE_COLORS["highlight"])),
+                name=f"Selected annotation: {CATEGORY_LABEL_BY_GENE.get(category, category)}",
+                hoverinfo="skip",
+            )
+        )
+    if marked_ids:
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="markers",
+                marker=dict(size=12, color=TISSUE_COLORS["filter"]),
+                name="Marked by node filters",
+                hoverinfo="skip",
+            )
+        )
+
+
 def build_network_figure(
     nodes: pd.DataFrame,
     edges: pd.DataFrame,
@@ -594,6 +672,7 @@ def build_network_figure(
     ad_threshold: float,
     marked_ids: set[int] | None = None,
     max_edges: int = 250,
+    is_gene_level: bool = False,
 ) -> go.Figure:
     marked_ids = marked_ids or set()
     nodes = nodes.copy()
@@ -797,38 +876,7 @@ def build_network_figure(
             showlegend=False,
         )
     )
-    if any(str(attrs["pretty"]).startswith(("M", "ME_")) for _, attrs in graph.nodes(data=True)):
-        fig.add_trace(
-            go.Scatter(
-                x=[None],
-                y=[None],
-                mode="markers",
-                marker=dict(size=12, color=TISSUE_COLORS["tissue_specific_cluster"]),
-                name="Tissue specific cluster",
-                hoverinfo="skip",
-            )
-        )
-    if category:
-        fig.add_trace(
-            go.Scatter(
-                x=[None],
-                y=[None],
-                mode="markers",
-                marker=dict(size=12, color=TISSUE_COLORS["highlight"], line=dict(width=2, color=TISSUE_COLORS["highlight"])),
-                name=f"Selected annotation: {CATEGORY_LABEL_BY_GENE.get(category, category)}",
-                hoverinfo="skip",
-            )
-        )
-        fig.add_trace(
-            go.Scatter(
-                x=[None],
-                y=[None],
-                mode="markers",
-                marker=dict(size=12, color=TISSUE_COLORS["cross_tissue_cluster"]),
-                name="Cross tissue cluster",
-                hoverinfo="skip",
-            )
-        )
+    add_network_legend(fig, nodes, graph, category, is_gene_level, marked_ids)
     fig.update_layout(
         title=title,
         height=720,
@@ -1275,6 +1323,7 @@ def run_module_view(manifest: dict, category_key: str | None, module_ann: pd.Dat
             ad_threshold=ad_threshold,
             marked_ids=marked,
             max_edges=max_edges,
+            is_gene_level=False,
         )
         st.plotly_chart(fig, use_container_width=True)
 
@@ -1331,6 +1380,12 @@ def run_gene_view(manifest: dict, category_key: str | None, module_ann: pd.DataF
     c2.metric("Edges", f"{len(edges):,}")
     c3.metric("Edges above threshold", f"{int((edges['frequency'] >= threshold).sum()):,}")
     c4.metric("Marked nodes", f"{len(marked):,}")
+    tissues = available_tissues(nodes)
+    tissue_text = ", ".join(f"{tissue} = {TISSUE_COLORS.get(tissue, TISSUE_COLORS['default'])}" for tissue in tissues) or "none"
+    st.caption(
+        f"Gene colors: phenotype = purple diamond; tissues: {tissue_text}. "
+        "Amber = selected sidebar annotation; black = marked by node filters."
+    )
 
     renderer = st.radio("Network renderer", ["Plotly", "Draggable nodes"], horizontal=True, key="gene_renderer")
     if renderer == "Draggable nodes":
@@ -1361,6 +1416,7 @@ def run_gene_view(manifest: dict, category_key: str | None, module_ann: pd.DataF
             ad_threshold=ad_threshold,
             marked_ids=marked,
             max_edges=max_edges,
+            is_gene_level=True,
         )
         st.plotly_chart(fig, use_container_width=True)
 
