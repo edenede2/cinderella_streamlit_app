@@ -10,6 +10,7 @@ import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 APP_ROOT = Path(__file__).parent
@@ -732,6 +733,183 @@ def build_network_figure(
     return fig
 
 
+def draggable_network_html(
+    nodes: pd.DataFrame,
+    edges: pd.DataFrame,
+    threshold: float,
+    category: str | None,
+    gene_ann: pd.DataFrame,
+    module_ann: pd.DataFrame,
+    ad_threshold: float,
+    marked_ids: set[int] | None = None,
+    max_edges: int = 250,
+) -> str:
+    marked_ids = marked_ids or set()
+    nodes = nodes.copy()
+    edges = edges[edges["frequency"] >= threshold].copy()
+    if edges.empty:
+        return "<div style='height:680px;display:flex;align-items:center;justify-content:center;font-family:sans-serif;'>No edges at the selected threshold.</div>"
+
+    edges = edges.sort_values("frequency", ascending=False).head(max_edges)
+    keep_ids = set(edges["source_id"].astype(int)) | set(edges["target_id"].astype(int))
+    nodes = nodes[nodes["node_id"].astype(int).isin(keep_ids)].copy()
+
+    graph = nx.DiGraph()
+    for _, row in nodes.iterrows():
+        graph.add_node(
+            int(row["node_id"]),
+            raw=str(row["raw_name"]),
+            pretty=str(row["pretty_name"]),
+            is_phenotype=bool(int(row["is_phenotype"])),
+            source_runs=str(row.get("source_runs", "")),
+        )
+    for _, row in edges.iterrows():
+        src = int(row["source_id"])
+        dst = int(row["target_id"])
+        if src in graph and dst in graph:
+            graph.add_edge(src, dst, weight=float(row["frequency"]), source_runs=str(row.get("source_runs", "")))
+
+    if not graph.nodes:
+        return "<div style='height:680px;display:flex;align-items:center;justify-content:center;font-family:sans-serif;'>No connected nodes to display.</div>"
+
+    pos = nx.spring_layout(
+        graph,
+        seed=42,
+        k=2.4 / math.sqrt(max(graph.number_of_nodes(), 2)),
+        iterations=120,
+        weight="weight",
+    )
+
+    vis_nodes = []
+    metrics = edge_metrics(nodes, edges, threshold)
+    for node_id, attrs in graph.nodes(data=True):
+        raw = attrs["raw"]
+        pretty = attrs["pretty"]
+        is_pheno = attrs["is_phenotype"]
+        metric = metrics.loc[node_id] if node_id in metrics.index else None
+
+        if is_pheno:
+            label = clean_phenotype(pretty)
+            color = TISSUE_COLORS["phenotype"]
+            shape = "diamond"
+            size = 24
+            title = f"<b>{label}</b><br>Phenotype"
+        elif pretty.startswith("M") or pretty.startswith("ME_"):
+            mod_id = module_number(pretty)
+            label = f"M{mod_id}" if mod_id is not None else pretty
+            ann = module_annotation_row(pretty, module_ann)
+            color = module_cluster_color(ann)
+            shape = "dot"
+            size = 20
+            title = f"<b>{label}</b><br>Module"
+            if ann is not None:
+                title += f"<br>Unique genes: {int(ann.get('unique_genes', 0) or 0)}"
+                if "cluster_tissue_class_095" in ann:
+                    title += f"<br>Cluster class: {ann.get('cluster_tissue_class_095')}"
+                if "dominant_tissue" in ann:
+                    title += f"<br>Dominant tissue: {ann.get('dominant_tissue')}"
+                if "max_tissue_fraction" in ann and pd.notna(ann.get("max_tissue_fraction")):
+                    title += f"<br>Max tissue fraction: {float(ann.get('max_tissue_fraction')):.3f}"
+                title += "<br>" + "<br>".join(category_hover_lines_for_module(ann, ad_threshold))
+                if category and float(ann.get(MODULE_COUNT_BY_GENE.get(category), 0.0) or 0.0) > 0:
+                    size = 24
+        else:
+            label = display_gene_label(raw, gene_ann)
+            tissue = tissue_from_raw(raw)
+            color = TISSUE_COLORS.get(tissue, TISSUE_COLORS["default"])
+            shape = "dot"
+            size = 17
+            ann = gene_annotation_row(raw, gene_ann)
+            title = f"<b>{label}</b><br>{gene_base(raw)}<br>Tissue: {tissue or 'none'}"
+            if ann is not None:
+                title += f"<br>Categories text: {ann.get('target_categories', '') or 'none'}"
+                title += "<br>" + "<br>".join(category_hover_lines_for_gene(ann, ad_threshold))
+                if category and category_value(ann, category, ad_threshold):
+                    size = 22
+                    color = TISSUE_COLORS["highlight"]
+
+        if metric is not None:
+            title += (
+                f"<br>Incoming edges: {int(metric['in_edges'])}; outgoing edges: {int(metric['out_edges'])}"
+                f"<br>To phenotype edges: {int(metric['to_phenotype_edges'])}; from phenotype edges: {int(metric['from_phenotype_edges'])}"
+            )
+        if attrs.get("source_runs"):
+            source_label = "Gene source" if not is_pheno and not (pretty.startswith("M") or pretty.startswith("ME_")) else "Source"
+            title += f"<br>{source_label}: {attrs['source_runs']}"
+        if node_id in marked_ids:
+            title += "<br><b>Matches selected node conditions</b>"
+            color = TISSUE_COLORS["filter"]
+            size = max(size, 25)
+
+        x, y = pos[node_id]
+        vis_nodes.append(
+            {
+                "id": int(node_id),
+                "label": label,
+                "title": title,
+                "x": float(x * 900),
+                "y": float(y * 650),
+                "size": size,
+                "shape": shape,
+                "color": {"background": color, "border": "#ffffff", "highlight": {"background": color, "border": "#111827"}},
+                "font": {"size": 15 if is_pheno else 13, "face": "Arial", "color": "#111827"},
+            }
+        )
+
+    max_w = max((graph[u][v]["weight"] for u, v in graph.edges), default=1.0)
+    vis_edges = [
+        {
+            "from": int(u),
+            "to": int(v),
+            "value": float(graph[u][v]["weight"]),
+            "width": 1.0 + 4.0 * float(graph[u][v]["weight"]) / max_w,
+            "title": f"Edge frequency: {float(graph[u][v]['weight']):.3f}",
+            "arrows": {"to": {"enabled": True, "scaleFactor": 0.7}},
+            "color": {"color": "rgba(80,80,80,0.42)", "highlight": "#111827"},
+            "smooth": {"type": "continuous"},
+        }
+        for u, v in graph.edges
+    ]
+
+    nodes_json = json.dumps(vis_nodes)
+    edges_json = json.dumps(vis_edges)
+    return f"""
+    <html>
+      <head>
+        <script src="https://unpkg.com/vis-network@9.1.9/dist/vis-network.min.js"></script>
+        <style>
+          body {{ margin: 0; font-family: Arial, sans-serif; }}
+          #network {{ height: 700px; border: 1px solid #e5e7eb; border-radius: 6px; background: #ffffff; }}
+          #toolbar {{ display: flex; gap: 10px; align-items: center; margin: 0 0 8px 0; color: #374151; font-size: 13px; }}
+          button {{ border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px; padding: 5px 9px; cursor: pointer; }}
+          button:hover {{ background: #eef2f7; }}
+        </style>
+      </head>
+      <body>
+        <div id="toolbar">
+          <button onclick="network.fit({{animation: true}})">Fit</button>
+          <button onclick="network.stabilize(80)">Re-layout</button>
+          <span>Select nodes with click or drag a node to reposition it. Positions are temporary in the browser.</span>
+        </div>
+        <div id="network"></div>
+        <script>
+          const nodes = new vis.DataSet({nodes_json});
+          const edges = new vis.DataSet({edges_json});
+          const container = document.getElementById("network");
+          const options = {{
+            interaction: {{ hover: true, multiselect: true, navigationButtons: true, keyboard: true, dragNodes: true }},
+            physics: {{ enabled: false }},
+            edges: {{ selectionWidth: 2 }},
+            nodes: {{ borderWidth: 1.5 }}
+          }};
+          const network = new vis.Network(container, {{ nodes, edges }}, options);
+          network.fit({{ animation: false }});
+        </script>
+      </body>
+    </html>
+    """
+
+
 def edge_heatmap(
     nodes: pd.DataFrame,
     edges: pd.DataFrame,
@@ -854,19 +1032,37 @@ def run_module_view(manifest: dict, category_key: str | None, module_ann: pd.Dat
     c3.metric("Edges above threshold", f"{int((edges['frequency'] >= threshold).sum()):,}")
     c4.metric("Marked nodes", f"{len(marked):,}")
 
-    fig = build_network_figure(
-        nodes,
-        edges,
-        threshold,
-        category_key,
-        gene_ann,
-        module_ann,
-        title=f"Module-level BN: {manifest['label']} / {active_label}",
-        ad_threshold=ad_threshold,
-        marked_ids=marked,
-        max_edges=max_edges,
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    renderer = st.radio("Network renderer", ["Plotly", "Draggable nodes"], horizontal=True, key="module_renderer")
+    if renderer == "Draggable nodes":
+        components.html(
+            draggable_network_html(
+                nodes,
+                edges,
+                threshold,
+                category_key,
+                gene_ann,
+                module_ann,
+                ad_threshold=ad_threshold,
+                marked_ids=marked,
+                max_edges=max_edges,
+            ),
+            height=750,
+            scrolling=False,
+        )
+    else:
+        fig = build_network_figure(
+            nodes,
+            edges,
+            threshold,
+            category_key,
+            gene_ann,
+            module_ann,
+            title=f"Module-level BN: {manifest['label']} / {active_label}",
+            ad_threshold=ad_threshold,
+            marked_ids=marked,
+            max_edges=max_edges,
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
     tab1, tab2, tab3 = st.tabs(["Drivers", "Heatmap", "Selection table"])
     with tab1:
@@ -922,19 +1118,37 @@ def run_gene_view(manifest: dict, category_key: str | None, module_ann: pd.DataF
     c3.metric("Edges above threshold", f"{int((edges['frequency'] >= threshold).sum()):,}")
     c4.metric("Marked nodes", f"{len(marked):,}")
 
-    fig = build_network_figure(
-        nodes,
-        edges,
-        threshold,
-        category_key,
-        gene_ann,
-        module_ann,
-        title=f"Gene-level BN: {active_label}",
-        ad_threshold=ad_threshold,
-        marked_ids=marked,
-        max_edges=max_edges,
-    )
-    st.plotly_chart(fig, use_container_width=True)
+    renderer = st.radio("Network renderer", ["Plotly", "Draggable nodes"], horizontal=True, key="gene_renderer")
+    if renderer == "Draggable nodes":
+        components.html(
+            draggable_network_html(
+                nodes,
+                edges,
+                threshold,
+                category_key,
+                gene_ann,
+                module_ann,
+                ad_threshold=ad_threshold,
+                marked_ids=marked,
+                max_edges=max_edges,
+            ),
+            height=750,
+            scrolling=False,
+        )
+    else:
+        fig = build_network_figure(
+            nodes,
+            edges,
+            threshold,
+            category_key,
+            gene_ann,
+            module_ann,
+            title=f"Gene-level BN: {active_label}",
+            ad_threshold=ad_threshold,
+            marked_ids=marked,
+            max_edges=max_edges,
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
     tab1, tab2, tab3 = st.tabs(["Phenotype drivers", "Heatmap", "Node annotations"])
     with tab1:
