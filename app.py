@@ -80,8 +80,13 @@ def load_manifest(path: str) -> dict:
 
 
 @st.cache_data(show_spinner=False)
-def load_tsv(path: str) -> pd.DataFrame:
+def _load_tsv(path: str, mtime_ns: int) -> pd.DataFrame:
     return pd.read_csv(DATA_ROOT / path, sep="\t", low_memory=False)
+
+
+def load_tsv(path: str) -> pd.DataFrame:
+    full_path = DATA_ROOT / path
+    return _load_tsv(path, full_path.stat().st_mtime_ns)
 
 
 @st.cache_data(show_spinner=False)
@@ -309,6 +314,24 @@ def module_cluster_color(ann: pd.Series | None) -> str:
     if is_specific is None:
         return TISSUE_COLORS["module"]
     return TISSUE_COLORS["tissue_specific_cluster"] if is_specific else TISSUE_COLORS["cross_tissue_cluster"]
+
+
+def module_cluster_counts(nodes: pd.DataFrame, module_ann: pd.DataFrame) -> dict[str, int]:
+    counts = {"Tissue specific": 0, "Cross tissue": 0, "Unknown": 0}
+    module_nodes = nodes[
+        nodes["is_phenotype"].astype(int).eq(0)
+        & nodes["pretty_name"].astype(str).str.startswith(("M", "ME_"))
+    ]
+    for pretty in module_nodes["pretty_name"].astype(str):
+        ann = module_annotation_row(pretty, module_ann)
+        is_specific = module_is_tissue_specific(ann)
+        if is_specific is None:
+            counts["Unknown"] += 1
+        elif is_specific:
+            counts["Tissue specific"] += 1
+        else:
+            counts["Cross tissue"] += 1
+    return counts
 
 
 def node_condition_controls(prefix: str, nodes: pd.DataFrame, is_gene_level: bool) -> dict:
@@ -1031,6 +1054,12 @@ def run_module_view(manifest: dict, category_key: str | None, module_ann: pd.Dat
     c2.metric("Edges", f"{len(edges):,}")
     c3.metric("Edges above threshold", f"{int((edges['frequency'] >= threshold).sum()):,}")
     c4.metric("Marked nodes", f"{len(marked):,}")
+    ts_ct_counts = module_cluster_counts(nodes, module_ann)
+    st.caption(
+        f"Module colors: blue = tissue specific (single-tissue fraction >= 0.95; n={ts_ct_counts['Tissue specific']}), "
+        f"red = cross tissue (n={ts_ct_counts['Cross tissue']}). "
+        f"Unknown annotation: {ts_ct_counts['Unknown']}."
+    )
 
     renderer = st.radio("Network renderer", ["Plotly", "Draggable nodes"], horizontal=True, key="module_renderer")
     if renderer == "Draggable nodes":
