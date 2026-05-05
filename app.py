@@ -57,6 +57,8 @@ TISSUE_COLORS = {
     "PCGBA23": "#ff7f0e",
     "phenotype": "#7b3f9b",
     "module": "#607d8b",
+    "tissue_specific_cluster": "#2563eb",
+    "cross_tissue_cluster": "#dc2626",
     "highlight": "#c44e52",
     "filter": "#111827",
     "default": "#78909c",
@@ -284,6 +286,28 @@ def module_annotation_row(pretty: str, module_ann: pd.DataFrame) -> pd.Series | 
         return None
     rows = module_ann[module_ann["cluster_id"].eq(mod_id)]
     return rows.iloc[0] if len(rows) else None
+
+
+def module_is_tissue_specific(ann: pd.Series | None) -> bool | None:
+    if ann is None:
+        return None
+    if "is_tissue_specific_095" in ann and pd.notna(ann["is_tissue_specific_095"]):
+        value = ann["is_tissue_specific_095"]
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "1", "yes"}
+        return bool(value)
+    if "max_tissue_fraction" in ann and pd.notna(ann["max_tissue_fraction"]):
+        return float(ann["max_tissue_fraction"]) >= 0.95
+    tissue_counts = [float(ann.get(col, 0.0) or 0.0) for col in ["AC", "MFBA9BA46", "PCGBA23"]]
+    total = sum(tissue_counts)
+    return max(tissue_counts) / total >= 0.95 if total else None
+
+
+def module_cluster_color(ann: pd.Series | None) -> str:
+    is_specific = module_is_tissue_specific(ann)
+    if is_specific is None:
+        return TISSUE_COLORS["module"]
+    return TISSUE_COLORS["tissue_specific_cluster"] if is_specific else TISSUE_COLORS["cross_tissue_cluster"]
 
 
 def node_condition_controls(prefix: str, nodes: pd.DataFrame, is_gene_level: bool) -> dict:
@@ -573,21 +597,26 @@ def build_network_figure(
         elif pretty.startswith("M") or pretty.startswith("ME_"):
             mod_id = module_number(pretty)
             label = f"M{mod_id}" if mod_id is not None else pretty
-            color = TISSUE_COLORS["module"]
             size = 22
             symbol = "circle"
             hover = f"<b>{label}</b><br>Module"
             ann = module_annotation_row(pretty, module_ann)
+            color = module_cluster_color(ann)
             if ann is not None:
                 total = int(ann.get("unique_genes", 0) or 0)
                 hover += f"<br>Unique genes: {total}"
                 if "tissues" in ann:
                     hover += f"<br>Tissues: {ann.get('tissues')}"
+                if "cluster_tissue_class_095" in ann:
+                    hover += f"<br>Cluster class: {ann.get('cluster_tissue_class_095')}"
+                if "dominant_tissue" in ann:
+                    hover += f"<br>Dominant tissue: {ann.get('dominant_tissue')}"
+                if "max_tissue_fraction" in ann and pd.notna(ann.get("max_tissue_fraction")):
+                    hover += f"<br>Max tissue fraction: {float(ann.get('max_tissue_fraction')):.3f}"
                 hover += "<br>" + "<br>".join(category_hover_lines_for_module(ann, ad_threshold))
                 if category:
                     count = float(ann.get(MODULE_COUNT_BY_GENE.get(category), 0.0) or 0.0)
                     if count > 0:
-                        color = TISSUE_COLORS["highlight"]
                         size = 27
         else:
             label = display_gene_label(raw, gene_ann)
@@ -613,7 +642,8 @@ def build_network_figure(
                 f"<br>To phenotype edges: {int(metric['to_phenotype_edges'])}; from phenotype edges: {int(metric['from_phenotype_edges'])}"
             )
         if attrs.get("source_runs"):
-            hover += f"<br>Runs: {attrs['source_runs']}"
+            source_label = "Gene source" if not is_pheno and not (pretty.startswith("M") or pretty.startswith("ME_")) else "Source"
+            hover += f"<br>{source_label}: {attrs['source_runs']}"
         if node_id in marked_ids:
             hover += "<br><b>Matches selected node conditions</b>"
             color = TISSUE_COLORS["filter"]
@@ -668,6 +698,27 @@ def build_network_figure(
             showlegend=False,
         )
     )
+    if any(str(attrs["pretty"]).startswith(("M", "ME_")) for _, attrs in graph.nodes(data=True)):
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="markers",
+                marker=dict(size=12, color=TISSUE_COLORS["tissue_specific_cluster"]),
+                name="Tissue specific cluster",
+                hoverinfo="skip",
+            )
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="markers",
+                marker=dict(size=12, color=TISSUE_COLORS["cross_tissue_cluster"]),
+                name="Cross tissue cluster",
+                hoverinfo="skip",
+            )
+        )
     fig.update_layout(
         title=title,
         height=720,
@@ -676,6 +727,7 @@ def build_network_figure(
         yaxis=dict(visible=False),
         plot_bgcolor="white",
         annotations=arrow_annotations[:180],
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1.0),
     )
     return fig
 
@@ -843,6 +895,9 @@ def run_gene_view(manifest: dict, category_key: str | None, module_ann: pd.DataF
         selected = st.selectbox("Gene-level run", sorted(labels), key="gene_run")
         run = labels[selected]
         nodes = load_tsv(run["nodes"])
+        gene_source = f"{run.get('run_group', '')} / {run.get('module', '')} / {clean_phenotype(run.get('phenotype', ''))}".strip(" /")
+        nodes["source_runs"] = ""
+        nodes.loc[nodes["is_phenotype"].astype(int).eq(0), "source_runs"] = gene_source
         edges = load_tsv(run["edges"])
         active_label = selected
         driver_pheno = run["phenotype"]
