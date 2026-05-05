@@ -274,6 +274,77 @@ def edge_metrics(nodes: pd.DataFrame, edges: pd.DataFrame, threshold: float) -> 
     return metrics
 
 
+def edge_relation_type(src_id: int, dst_id: int, id_to_pheno: dict[int, bool]) -> str:
+    src_pheno = bool(id_to_pheno.get(src_id, False))
+    dst_pheno = bool(id_to_pheno.get(dst_id, False))
+    if src_pheno and dst_pheno:
+        return "phenotype -> phenotype"
+    if src_pheno:
+        return "phenotype -> gene"
+    if dst_pheno:
+        return "gene -> phenotype"
+    return "gene -> gene"
+
+
+def edge_relationship_label(
+    edge: pd.Series,
+    id_to_label: dict[int, str],
+    id_to_pheno: dict[int, bool],
+) -> str:
+    src_id = int(edge["source_id"])
+    dst_id = int(edge["target_id"])
+    source = id_to_label.get(src_id, str(src_id))
+    target = id_to_label.get(dst_id, str(dst_id))
+    relation = edge_relation_type(src_id, dst_id, id_to_pheno)
+    frequency = float(edge["frequency"])
+    return f"{source} -> {target} ({relation}; edge frequency {frequency:.3f})"
+
+
+def node_relationship_summaries(
+    nodes: pd.DataFrame,
+    edges: pd.DataFrame,
+    threshold: float,
+    gene_ann: pd.DataFrame | None,
+    top_n: int = 5,
+) -> pd.DataFrame:
+    nodes = nodes.copy()
+    nodes["node_id"] = nodes["node_id"].astype(int)
+    id_to_label = {int(row["node_id"]): node_axis_label(row, gene_ann) for _, row in nodes.iterrows()}
+    id_to_pheno = dict(zip(nodes["node_id"], nodes["is_phenotype"].astype(int).eq(1)))
+    sub = edges[edges["frequency"] >= threshold].copy()
+
+    rows = []
+    for node_id in nodes["node_id"]:
+        incoming = sub[sub["target_id"].astype(int).eq(node_id)].sort_values("frequency", ascending=False)
+        outgoing = sub[sub["source_id"].astype(int).eq(node_id)].sort_values("frequency", ascending=False)
+        to_pheno = outgoing[outgoing["target_id"].astype(int).map(id_to_pheno).fillna(False)]
+        from_pheno = incoming[incoming["source_id"].astype(int).map(id_to_pheno).fillna(False)]
+        rows.append(
+            {
+                "node_id": int(node_id),
+                "relationship_in_edges": int(len(incoming)),
+                "relationship_out_edges": int(len(outgoing)),
+                "relationship_in_edge_frequency_sum": float(incoming["frequency"].sum()) if len(incoming) else 0.0,
+                "relationship_out_edge_frequency_sum": float(outgoing["frequency"].sum()) if len(outgoing) else 0.0,
+                "to_phenotype_edge_frequency": float(to_pheno["frequency"].max()) if len(to_pheno) else 0.0,
+                "from_phenotype_edge_frequency": float(from_pheno["frequency"].max()) if len(from_pheno) else 0.0,
+                "top_outgoing_relationships": "; ".join(
+                    edge_relationship_label(edge, id_to_label, id_to_pheno) for _, edge in outgoing.head(top_n).iterrows()
+                ),
+                "top_incoming_relationships": "; ".join(
+                    edge_relationship_label(edge, id_to_label, id_to_pheno) for _, edge in incoming.head(top_n).iterrows()
+                ),
+                "direct_to_phenotype_relationships": "; ".join(
+                    edge_relationship_label(edge, id_to_label, id_to_pheno) for _, edge in to_pheno.head(top_n).iterrows()
+                ),
+                "direct_from_phenotype_relationships": "; ".join(
+                    edge_relationship_label(edge, id_to_label, id_to_pheno) for _, edge in from_pheno.head(top_n).iterrows()
+                ),
+            }
+        )
+    return pd.DataFrame(rows).set_index("node_id")
+
+
 def category_value(row: pd.Series, category: str, ad_threshold: float) -> bool:
     if category == "has_ad_evidence":
         return float(row.get("open_targets_ad_score", 0.0) or 0.0) >= ad_threshold
@@ -1022,17 +1093,56 @@ def edge_heatmap(
         int(row["node_id"]): node_axis_label(row, gene_ann)
         for _, row in nodes.iterrows()
     }
+    id_to_raw = dict(zip(nodes["node_id"].astype(int), nodes["raw_name"].astype(str)))
+    id_to_pheno = dict(zip(nodes["node_id"].astype(int), nodes["is_phenotype"].astype(int).eq(1)))
     active = pd.concat([edges["source_id"], edges["target_id"]]).value_counts()
     keep = active.head(max_nodes).index.astype(int).tolist()
     names = [id_to_name.get(node_id, str(node_id)) for node_id in keep]
     matrix = pd.DataFrame(0.0, index=names, columns=names)
+    hover_text = pd.DataFrame("", index=names, columns=names)
+    for src_id in keep:
+        src_name = id_to_name.get(src_id, str(src_id))
+        for dst_id in keep:
+            dst_name = id_to_name.get(dst_id, str(dst_id))
+            hover_text.loc[src_name, dst_name] = (
+                f"<b>{src_name} -> {dst_name}</b><br>"
+                f"Relationship: {edge_relation_type(src_id, dst_id, id_to_pheno)}<br>"
+                "No edge above selected threshold"
+            )
     for _, row in edges.iterrows():
         src = int(row["source_id"])
         dst = int(row["target_id"])
         if src in keep and dst in keep:
-            matrix.loc[id_to_name.get(src, str(src)), id_to_name.get(dst, str(dst))] = float(row["frequency"])
-    fig = px.imshow(matrix, color_continuous_scale="YlOrRd", aspect="auto", labels=dict(color="Edge frequency"))
-    fig.update_layout(height=650, margin=dict(l=10, r=10, t=40, b=10), title="Edge-frequency matrix")
+            src_name = id_to_name.get(src, str(src))
+            dst_name = id_to_name.get(dst, str(dst))
+            frequency = float(row["frequency"])
+            relation = edge_relation_type(src, dst, id_to_pheno)
+            matrix.loc[src_name, dst_name] = frequency
+            hover_text.loc[src_name, dst_name] = (
+                f"<b>{src_name} -> {dst_name}</b><br>"
+                f"Relationship: {relation}<br>"
+                f"BN edge frequency: {frequency:.3f}<br>"
+                f"Source raw: {id_to_raw.get(src, src)}<br>"
+                f"Target raw: {id_to_raw.get(dst, dst)}"
+            )
+            if "mean_frequency" in row and pd.notna(row.get("mean_frequency")):
+                hover_text.loc[src_name, dst_name] += f"<br>Mean frequency across combined runs: {float(row['mean_frequency']):.3f}"
+            if "n_runs" in row and pd.notna(row.get("n_runs")):
+                hover_text.loc[src_name, dst_name] += f"<br>Runs containing edge: {int(row['n_runs'])}"
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=matrix.values,
+            x=matrix.columns.tolist(),
+            y=matrix.index.tolist(),
+            text=hover_text.values,
+            hovertemplate="%{text}<extra></extra>",
+            colorscale="YlOrRd",
+            colorbar=dict(title="Edge frequency"),
+            zmin=0,
+            zmax=max(1.0, float(matrix.values.max()) if matrix.size else 1.0),
+        )
+    )
+    fig.update_layout(height=650, margin=dict(l=10, r=10, t=40, b=10), title="BN edge-frequency matrix")
     return fig
 
 
@@ -1258,14 +1368,19 @@ def run_gene_view(manifest: dict, category_key: str | None, module_ann: pd.DataF
     with tab1:
         st.plotly_chart(driver_bar(edges, nodes, driver_pheno, top_n=35, gene_ann=gene_ann), use_container_width=True)
     with tab2:
+        st.caption("Cells show BN edge frequency between displayed nodes. This snapshot does not include raw pairwise gene-expression correlations.")
         st.plotly_chart(edge_heatmap(nodes, edges, threshold, gene_ann=gene_ann), use_container_width=True)
     with tab3:
+        relationship_summary = node_relationship_summaries(nodes, edges, threshold, gene_ann)
         ann_rows = []
         for _, row in nodes[nodes["is_phenotype"].astype(int).eq(0)].iterrows():
             raw = str(row["raw_name"])
             base = gene_base(raw)
             ann = gene_annotation_row(raw, gene_ann)
+            node_id = int(row["node_id"])
             record = {"node": raw, "label": display_gene_label(raw, gene_ann), "gene_base": base, "tissue": tissue_from_raw(raw)}
+            if node_id in relationship_summary.index:
+                record.update(relationship_summary.loc[node_id].to_dict())
             if ann is not None:
                 for col in ["hgnc_symbol", "hgnc_name", "target_categories", "therapeutic_target_score", "open_targets_ad_score"]:
                     if col in ann:
