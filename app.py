@@ -49,11 +49,6 @@ DATASET_SOURCES = [
         "Use in app": "Drug-target class annotations such as GPCRs, ion channels, nuclear receptors, and transporters.",
         "Link": "https://www.guidetopharmacology.org/",
     },
-    {
-        "Dataset": "CINDERellA Bayesian network outputs",
-        "Use in app": "Module-level and gene-level Bayesian network nodes, directed edges, and edge frequencies.",
-        "Link": "https://github.com/imsb-uke/CINDERellA",
-    },
 ]
 
 TISSUE_COLORS = {
