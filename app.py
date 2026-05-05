@@ -737,6 +737,17 @@ def build_network_figure(
                 hoverinfo="skip",
             )
         )
+    if category:
+        fig.add_trace(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="markers",
+                marker=dict(size=12, color=TISSUE_COLORS["highlight"], line=dict(width=2, color=TISSUE_COLORS["highlight"])),
+                name=f"Selected annotation: {CATEGORY_LABEL_BY_GENE.get(category, category)}",
+                hoverinfo="skip",
+            )
+        )
         fig.add_trace(
             go.Scatter(
                 x=[None],
@@ -814,6 +825,8 @@ def draggable_network_html(
         pretty = attrs["pretty"]
         is_pheno = attrs["is_phenotype"]
         metric = metrics.loc[node_id] if node_id in metrics.index else None
+        category_match = False
+        border_color = "#ffffff"
 
         if is_pheno:
             label = clean_phenotype(pretty)
@@ -839,6 +852,7 @@ def draggable_network_html(
                     title += f"<br>Max tissue fraction: {float(ann.get('max_tissue_fraction')):.3f}"
                 title += "<br>" + "<br>".join(category_hover_lines_for_module(ann, ad_threshold))
                 if category and float(ann.get(MODULE_COUNT_BY_GENE.get(category), 0.0) or 0.0) > 0:
+                    category_match = True
                     size = 24
         else:
             label = display_gene_label(raw, gene_ann)
@@ -852,8 +866,11 @@ def draggable_network_html(
                 title += f"<br>Categories text: {ann.get('target_categories', '') or 'none'}"
                 title += "<br>" + "<br>".join(category_hover_lines_for_gene(ann, ad_threshold))
                 if category and category_value(ann, category, ad_threshold):
+                    category_match = True
                     size = 22
                     color = TISSUE_COLORS["highlight"]
+        if category_match:
+            border_color = TISSUE_COLORS["highlight"]
 
         if metric is not None:
             title += (
@@ -871,16 +888,17 @@ def draggable_network_html(
         x, y = pos[node_id]
         vis_nodes.append(
             {
-                "id": int(node_id),
-                "label": label,
-                "title": title,
-                "x": float(x * 900),
-                "y": float(y * 650),
-                "size": size,
-                "shape": shape,
-                "color": {"background": color, "border": "#ffffff", "highlight": {"background": color, "border": "#111827"}},
-                "font": {"size": 15 if is_pheno else 13, "face": "Arial", "color": "#111827"},
-            }
+            "id": int(node_id),
+            "label": label,
+            "title": title,
+            "x": float(x * 900),
+            "y": float(y * 650),
+            "size": size,
+            "shape": shape,
+            "borderWidth": 3 if category_match else 1.5,
+            "color": {"background": color, "border": border_color, "highlight": {"background": color, "border": "#111827"}},
+            "font": {"size": 15 if is_pheno else 13, "face": "Arial", "color": "#111827"},
+        }
         )
 
     max_w = max((graph[u][v]["weight"] for u, v in graph.edges), default=1.0)
@@ -941,7 +959,7 @@ def draggable_network_html(
         <div id="toolbar">
           <button onclick="network.fit({{animation: true}})">Fit</button>
           <button onclick="network.stabilize(80)">Re-layout</button>
-          <span>Select nodes with click or drag a node to reposition it. Positions are temporary in the browser.</span>
+          <span>Select nodes with click or drag a node to reposition it. Amber marks the selected sidebar annotation.</span>
         </div>
         <div id="layout">
           <div id="network"></div>
@@ -1115,7 +1133,7 @@ def run_module_view(manifest: dict, category_key: str | None, module_ann: pd.Dat
     st.caption(
         f"Module colors: blue = tissue specific (single-tissue fraction >= 0.95; n={ts_ct_counts['Tissue specific']}), "
         f"red = cross tissue (n={ts_ct_counts['Cross tissue']}). "
-        f"Unknown annotation: {ts_ct_counts['Unknown']}."
+        f"Amber outline = selected sidebar annotation. Unknown annotation: {ts_ct_counts['Unknown']}."
     )
 
     renderer = st.radio("Network renderer", ["Plotly", "Draggable nodes"], horizontal=True, key="module_renderer")
