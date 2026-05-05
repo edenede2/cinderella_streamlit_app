@@ -685,11 +685,20 @@ def build_network_figure(
     return fig
 
 
-def edge_heatmap(nodes: pd.DataFrame, edges: pd.DataFrame, threshold: float, max_nodes: int = 60) -> go.Figure:
+def edge_heatmap(
+    nodes: pd.DataFrame,
+    edges: pd.DataFrame,
+    threshold: float,
+    max_nodes: int = 60,
+    gene_ann: pd.DataFrame | None = None,
+) -> go.Figure:
     edges = edges[edges["frequency"] >= threshold].copy()
     if edges.empty:
         return go.Figure().update_layout(title="No edges at selected threshold", height=450)
-    id_to_name = dict(zip(nodes["node_id"].astype(int), nodes["pretty_name"].astype(str)))
+    id_to_name = {
+        int(row["node_id"]): node_axis_label(row, gene_ann)
+        for _, row in nodes.iterrows()
+    }
     active = pd.concat([edges["source_id"], edges["target_id"]]).value_counts()
     keep = active.head(max_nodes).index.astype(int).tolist()
     names = [id_to_name.get(node_id, str(node_id)) for node_id in keep]
@@ -704,8 +713,29 @@ def edge_heatmap(nodes: pd.DataFrame, edges: pd.DataFrame, threshold: float, max
     return fig
 
 
-def driver_bar(edges: pd.DataFrame, nodes: pd.DataFrame, phenotype: str | None = None, top_n: int = 25) -> go.Figure:
-    id_to_name = dict(zip(nodes["node_id"].astype(int), nodes["pretty_name"].astype(str)))
+def node_axis_label(row: pd.Series, gene_ann: pd.DataFrame | None = None) -> str:
+    pretty = str(row["pretty_name"])
+    raw = str(row["raw_name"])
+    if bool(int(row["is_phenotype"])):
+        return clean_phenotype(pretty)
+    if pretty.startswith("M") or pretty.startswith("ME_"):
+        return pretty
+    if gene_ann is not None:
+        return display_gene_label(raw, gene_ann)
+    return pretty
+
+
+def driver_bar(
+    edges: pd.DataFrame,
+    nodes: pd.DataFrame,
+    phenotype: str | None = None,
+    top_n: int = 25,
+    gene_ann: pd.DataFrame | None = None,
+) -> go.Figure:
+    id_to_name = {
+        int(row["node_id"]): node_axis_label(row, gene_ann)
+        for _, row in nodes.iterrows()
+    }
     phenotype_ids = set(nodes.loc[nodes["is_phenotype"].astype(int).eq(1), "node_id"].astype(int))
     if phenotype:
         pheno_rows = nodes[nodes["pretty_name"].astype(str).eq(phenotype)]
@@ -795,7 +825,7 @@ def run_module_view(manifest: dict, category_key: str | None, module_ann: pd.Dat
     with tab1:
         st.plotly_chart(driver_bar(edges, nodes, driver_pheno, top_n=35), use_container_width=True)
     with tab2:
-        st.plotly_chart(edge_heatmap(nodes, edges, threshold), use_container_width=True)
+        st.plotly_chart(edge_heatmap(nodes, edges, threshold, gene_ann=gene_ann), use_container_width=True)
     with tab3:
         table_key = "selected_modules" if "selected_modules" in manifest["tables"] else "all_module_phenotype_correlations"
         if table_key in manifest["tables"]:
@@ -858,7 +888,7 @@ def run_gene_view(manifest: dict, category_key: str | None, module_ann: pd.DataF
 
     tab1, tab2, tab3 = st.tabs(["Phenotype drivers", "Heatmap", "Node annotations"])
     with tab1:
-        st.plotly_chart(driver_bar(edges, nodes, driver_pheno, top_n=35), use_container_width=True)
+        st.plotly_chart(driver_bar(edges, nodes, driver_pheno, top_n=35, gene_ann=gene_ann), use_container_width=True)
     with tab2:
         st.plotly_chart(edge_heatmap(nodes, edges, threshold), use_container_width=True)
     with tab3:
