@@ -60,7 +60,7 @@ TISSUE_COLORS = {
     "module": "#607d8b",
     "tissue_specific_cluster": "#2563eb",
     "cross_tissue_cluster": "#dc2626",
-    "highlight": "#c44e52",
+    "highlight": "#f59e0b",
     "filter": "#111827",
     "default": "#78909c",
 }
@@ -601,7 +601,7 @@ def build_network_figure(
             )
         )
 
-    node_x, node_y, labels, hovers, colors, sizes, symbols, line_widths = [], [], [], [], [], [], [], []
+    node_x, node_y, labels, hovers, colors, sizes, symbols, line_widths, line_colors = [], [], [], [], [], [], [], [], []
     metrics = edge_metrics(nodes, edges, threshold)
     for node_id, attrs in graph.nodes(data=True):
         x, y = pos[node_id]
@@ -609,6 +609,7 @@ def build_network_figure(
         pretty = attrs["pretty"]
         is_pheno = attrs["is_phenotype"]
         metric = metrics.loc[node_id] if node_id in metrics.index else None
+        category_match = False
         node_x.append(x)
         node_y.append(y)
 
@@ -641,6 +642,7 @@ def build_network_figure(
                 if category:
                     count = float(ann.get(MODULE_COUNT_BY_GENE.get(category), 0.0) or 0.0)
                     if count > 0:
+                        category_match = True
                         size = 27
         else:
             label = display_gene_label(raw, gene_ann)
@@ -657,6 +659,7 @@ def build_network_figure(
                 hover += f"<br>Categories text: {cats or 'none'}<br>Therapeutic target score: {score}"
                 hover += "<br>" + "<br>".join(category_hover_lines_for_gene(ann, ad_threshold))
                 if category and category_value(ann, category, ad_threshold):
+                    category_match = True
                     color = TISSUE_COLORS["highlight"]
                     size = 24
 
@@ -678,7 +681,8 @@ def build_network_figure(
         colors.append(color)
         sizes.append(size)
         symbols.append(symbol)
-        line_widths.append(3.2 if node_id in marked_ids else 1.5)
+        line_widths.append(3.6 if node_id in marked_ids or category_match else 1.5)
+        line_colors.append(TISSUE_COLORS["highlight"] if category_match else "#ffffff")
 
     fig = go.Figure()
     fig.add_trace(
@@ -717,7 +721,7 @@ def build_network_figure(
                 size=sizes,
                 color=colors,
                 symbol=symbols,
-                line=dict(width=line_widths, color="#ffffff"),
+                line=dict(width=line_widths, color=line_colors),
             ),
             showlegend=False,
         )
