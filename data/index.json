@@ -1,0 +1,23 @@
+{
+  "datasets": [
+    {
+      "slug": "therapeutic_targets",
+      "label": "Therapeutic target selected modules",
+      "manifest": "datasets/therapeutic_targets/manifest.json"
+    },
+    {
+      "slug": "parallel_phenos_40",
+      "label": "Correlation top-40 selected modules",
+      "manifest": "datasets/parallel_phenos_40/manifest.json"
+    },
+    {
+      "slug": "signed_80",
+      "label": "Signed 80-module run",
+      "manifest": "datasets/signed_80/manifest.json"
+    }
+  ],
+  "target_annotations": {
+    "genes": "target_annotations/gene_target_annotations_compact.tsv",
+    "modules": "target_annotations/module_target_summary_level4.tsv"
+  }
+}

@@ -1,0 +1,114 @@
+{
+  "slug": "parallel_phenos_40",
+  "label": "Correlation top-40 selected modules",
+  "source_path": "/media/psylab-6028/DATA/Eden/CINDERellA/notebooks/results/se2_4_parallel_phenos_40",
+  "module_runs": [
+    {
+      "phenotype": "PHENO_cogn_global",
+      "n_nodes": 41,
+      "n_edges": 1342,
+      "max_frequency": 0.988,
+      "nodes": "datasets/parallel_phenos_40/module_runs/PHENO_cogn_global/nodes.tsv",
+      "edges": "datasets/parallel_phenos_40/module_runs/PHENO_cogn_global/edges.tsv",
+      "id": "PHENO_cogn_global"
+    },
+    {
+      "phenotype": "PHENO_cogng_demog_slope",
+      "n_nodes": 41,
+      "n_edges": 1333,
+      "max_frequency": 0.987,
+      "nodes": "datasets/parallel_phenos_40/module_runs/PHENO_cogng_demog_slope/nodes.tsv",
+      "edges": "datasets/parallel_phenos_40/module_runs/PHENO_cogng_demog_slope/edges.tsv",
+      "id": "PHENO_cogng_demog_slope"
+    },
+    {
+      "phenotype": "PHENO_motor10_demog_slope",
+      "n_nodes": 41,
+      "n_edges": 1325,
+      "max_frequency": 0.986,
+      "nodes": "datasets/parallel_phenos_40/module_runs/PHENO_motor10_demog_slope/nodes.tsv",
+      "edges": "datasets/parallel_phenos_40/module_runs/PHENO_motor10_demog_slope/edges.tsv",
+      "id": "PHENO_motor10_demog_slope"
+    },
+    {
+      "phenotype": "PHENO_pseudotime",
+      "n_nodes": 41,
+      "n_edges": 1325,
+      "max_frequency": 0.992,
+      "nodes": "datasets/parallel_phenos_40/module_runs/PHENO_pseudotime/nodes.tsv",
+      "edges": "datasets/parallel_phenos_40/module_runs/PHENO_pseudotime/edges.tsv",
+      "id": "PHENO_pseudotime"
+    },
+    {
+      "phenotype": "PHENO_sqrt_parksc_demog_slope",
+      "n_nodes": 41,
+      "n_edges": 1338,
+      "max_frequency": 0.987,
+      "nodes": "datasets/parallel_phenos_40/module_runs/PHENO_sqrt_parksc_demog_slope/nodes.tsv",
+      "edges": "datasets/parallel_phenos_40/module_runs/PHENO_sqrt_parksc_demog_slope/edges.tsv",
+      "id": "PHENO_sqrt_parksc_demog_slope"
+    }
+  ],
+  "gene_runs": [
+    {
+      "phenotype": "PHENO_cogn_global",
+      "n_nodes": 41,
+      "n_edges": 1357,
+      "max_frequency": 0.992,
+      "nodes": "datasets/parallel_phenos_40/gene_runs/cross_module__cross_module_cogn_global__cogn_global/nodes.tsv",
+      "edges": "datasets/parallel_phenos_40/gene_runs/cross_module__cross_module_cogn_global__cogn_global/edges.tsv",
+      "id": "cross_module__cross_module_cogn_global__cogn_global",
+      "module": "cross_cogn_global",
+      "run_group": "cross_module"
+    },
+    {
+      "phenotype": "PHENO_cogng_demog_slope",
+      "n_nodes": 41,
+      "n_edges": 1363,
+      "max_frequency": 0.967,
+      "nodes": "datasets/parallel_phenos_40/gene_runs/cross_module__cross_module_cogng_demog_slope__cogng_demog_slope/nodes.tsv",
+      "edges": "datasets/parallel_phenos_40/gene_runs/cross_module__cross_module_cogng_demog_slope__cogng_demog_slope/edges.tsv",
+      "id": "cross_module__cross_module_cogng_demog_slope__cogng_demog_slope",
+      "module": "cross_cogng_demog_slope",
+      "run_group": "cross_module"
+    },
+    {
+      "phenotype": "PHENO_motor10_demog_slope",
+      "n_nodes": 41,
+      "n_edges": 1408,
+      "max_frequency": 0.954,
+      "nodes": "datasets/parallel_phenos_40/gene_runs/cross_module__cross_module_motor10_demog_slope__motor10_demog_slope/nodes.tsv",
+      "edges": "datasets/parallel_phenos_40/gene_runs/cross_module__cross_module_motor10_demog_slope__motor10_demog_slope/edges.tsv",
+      "id": "cross_module__cross_module_motor10_demog_slope__motor10_demog_slope",
+      "module": "cross_motor10_demog_slope",
+      "run_group": "cross_module"
+    },
+    {
+      "phenotype": "PHENO_pseudotime",
+      "n_nodes": 41,
+      "n_edges": 1393,
+      "max_frequency": 0.919,
+      "nodes": "datasets/parallel_phenos_40/gene_runs/cross_module__cross_module_pseudotime__pseudotime/nodes.tsv",
+      "edges": "datasets/parallel_phenos_40/gene_runs/cross_module__cross_module_pseudotime__pseudotime/edges.tsv",
+      "id": "cross_module__cross_module_pseudotime__pseudotime",
+      "module": "cross_pseudotime",
+      "run_group": "cross_module"
+    },
+    {
+      "phenotype": "PHENO_sqrt_parksc_demog_slope",
+      "n_nodes": 41,
+      "n_edges": 1435,
+      "max_frequency": 0.98,
+      "nodes": "datasets/parallel_phenos_40/gene_runs/cross_module__cross_module_sqrt_parksc_demog_slope__sqrt_parksc_demog_slope/nodes.tsv",
+      "edges": "datasets/parallel_phenos_40/gene_runs/cross_module__cross_module_sqrt_parksc_demog_slope__sqrt_parksc_demog_slope/edges.tsv",
+      "id": "cross_module__cross_module_sqrt_parksc_demog_slope__sqrt_parksc_demog_slope",
+      "module": "cross_sqrt_parksc_demog_slope",
+      "run_group": "cross_module"
+    }
+  ],
+  "tables": {
+    "all_phenotypes_edge_summary": "datasets/parallel_phenos_40/tables/all_phenotypes_edge_summary.tsv",
+    "normality": "datasets/parallel_phenos_40/tables/normality_test_results.tsv",
+    "selected_modules": "datasets/parallel_phenos_40/tables/reduced_modules_table.tsv"
+  }
+}
