@@ -902,10 +902,35 @@ def draggable_network_html(
         <script src="https://unpkg.com/vis-network@9.1.9/dist/vis-network.min.js"></script>
         <style>
           body {{ margin: 0; font-family: Arial, sans-serif; }}
+          #layout {{ display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 10px; }}
           #network {{ height: 700px; border: 1px solid #e5e7eb; border-radius: 6px; background: #ffffff; }}
+          #selectedPanel {{
+            height: 700px;
+            border: 1px solid #e5e7eb;
+            border-radius: 6px;
+            background: #ffffff;
+            padding: 12px;
+            overflow: auto;
+            color: #111827;
+            box-sizing: border-box;
+          }}
+          #selectedPanel h3 {{ margin: 0 0 8px 0; font-size: 15px; }}
+          #selectedPanel .empty {{ color: #64748b; font-size: 13px; line-height: 1.4; }}
+          #selectedPanel .nodeMeta {{
+            border-top: 1px solid #e5e7eb;
+            padding-top: 10px;
+            margin-top: 10px;
+            font-size: 13px;
+            line-height: 1.35;
+          }}
+          #selectedPanel .nodeMeta:first-of-type {{ border-top: 0; padding-top: 0; margin-top: 0; }}
           #toolbar {{ display: flex; gap: 10px; align-items: center; margin: 0 0 8px 0; color: #374151; font-size: 13px; }}
           button {{ border: 1px solid #cbd5e1; background: #f8fafc; border-radius: 6px; padding: 5px 9px; cursor: pointer; }}
           button:hover {{ background: #eef2f7; }}
+          @media (max-width: 900px) {{
+            #layout {{ grid-template-columns: 1fr; }}
+            #selectedPanel {{ height: 260px; }}
+          }}
         </style>
       </head>
       <body>
@@ -914,11 +939,18 @@ def draggable_network_html(
           <button onclick="network.stabilize(80)">Re-layout</button>
           <span>Select nodes with click or drag a node to reposition it. Positions are temporary in the browser.</span>
         </div>
-        <div id="network"></div>
+        <div id="layout">
+          <div id="network"></div>
+          <div id="selectedPanel">
+            <h3>Selected node metadata</h3>
+            <div id="selectedInfo" class="empty">Select a node in the network to show its metadata here.</div>
+          </div>
+        </div>
         <script>
           const nodes = new vis.DataSet({nodes_json});
           const edges = new vis.DataSet({edges_json});
           const container = document.getElementById("network");
+          const selectedInfo = document.getElementById("selectedInfo");
           const options = {{
             interaction: {{ hover: true, multiselect: true, navigationButtons: true, keyboard: true, dragNodes: true }},
             physics: {{ enabled: false }},
@@ -926,6 +958,27 @@ def draggable_network_html(
             nodes: {{ borderWidth: 1.5 }}
           }};
           const network = new vis.Network(container, {{ nodes, edges }}, options);
+          function updateSelectedPanel(selectedIds) {{
+            if (!selectedIds || selectedIds.length === 0) {{
+              selectedInfo.className = "empty";
+              selectedInfo.innerHTML = "Select a node in the network to show its metadata here.";
+              return;
+            }}
+            selectedInfo.className = "";
+            selectedInfo.innerHTML = selectedIds.map((id) => {{
+              const node = nodes.get(id);
+              return `<div class="nodeMeta">${{node.title || node.label || id}}</div>`;
+            }}).join("");
+          }}
+          network.on("selectNode", function(params) {{
+            updateSelectedPanel(params.nodes);
+          }});
+          network.on("deselectNode", function(params) {{
+            updateSelectedPanel(params.nodes);
+          }});
+          network.on("click", function(params) {{
+            updateSelectedPanel(params.nodes);
+          }});
           network.fit({{ animation: false }});
         </script>
       </body>
