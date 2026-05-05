@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 
 import networkx as nx
-import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
@@ -16,32 +15,46 @@ import streamlit as st
 APP_ROOT = Path(__file__).parent
 DATA_ROOT = APP_ROOT / "data"
 
-THERAPEUTIC_CATEGORIES = {
-    "None": None,
-    "Kinase": "is_kinase",
-    "GPCR": "is_gPCR",
-    "Ion channel": "is_ion_channel",
-    "Nuclear receptor": "is_nuclear_receptor",
-    "Transporter": "is_transporter",
-    "Enzyme": "is_enzyme",
-    "Receptor": "is_receptor",
-    "Transcription factor": "is_transcription_factor",
-    "Known drug target": "is_known_drug_target",
-    "Alzheimer evidence": "has_ad_evidence",
-}
+CATEGORY_SPECS = [
+    ("Kinase", "is_kinase", "n_kinase", "frac_kinase"),
+    ("GPCR", "is_gPCR", "n_GPCR", "frac_GPCR"),
+    ("Ion channel", "is_ion_channel", "n_ion_channel", "frac_ion_channel"),
+    ("Nuclear receptor", "is_nuclear_receptor", "n_nuclear_receptor", "frac_nuclear_receptor"),
+    ("Transporter", "is_transporter", "n_transporter", "frac_transporter"),
+    ("Enzyme", "is_enzyme", "n_enzyme", "frac_enzyme"),
+    ("Receptor", "is_receptor", "n_receptor", "frac_receptor"),
+    ("Transcription factor", "is_transcription_factor", "n_transcription_factor", "frac_transcription_factor"),
+    ("Known drug target", "is_known_drug_target", "n_known_drug_target", "frac_known_drug_target"),
+    ("Alzheimer evidence", "has_ad_evidence", "n_Alzheimer_evidence", "frac_Alzheimer_evidence"),
+]
 
-MODULE_CATEGORY_COUNT = {
-    "is_kinase": "n_kinase",
-    "is_gPCR": "n_GPCR",
-    "is_ion_channel": "n_ion_channel",
-    "is_nuclear_receptor": "n_nuclear_receptor",
-    "is_transporter": "n_transporter",
-    "is_enzyme": "n_enzyme",
-    "is_receptor": "n_receptor",
-    "is_transcription_factor": "n_transcription_factor",
-    "is_known_drug_target": "n_known_drug_target",
-    "has_ad_evidence": "n_Alzheimer_evidence",
-}
+THERAPEUTIC_CATEGORIES = {"None": None, **{label: gene_col for label, gene_col, _, _ in CATEGORY_SPECS}}
+CATEGORY_LABEL_BY_GENE = {gene_col: label for label, gene_col, _, _ in CATEGORY_SPECS}
+MODULE_COUNT_BY_GENE = {gene_col: count_col for _, gene_col, count_col, _ in CATEGORY_SPECS}
+MODULE_FRAC_BY_GENE = {gene_col: frac_col for _, gene_col, _, frac_col in CATEGORY_SPECS}
+
+DATASET_SOURCES = [
+    {
+        "Dataset": "HGNC Gene Names",
+        "Use in app": "Gene symbols, gene names, and approved human-gene identifiers.",
+        "Link": "https://www.genenames.org/",
+    },
+    {
+        "Dataset": "Open Targets Platform",
+        "Use in app": "Alzheimer disease target evidence scores and evidence-source labels.",
+        "Link": "https://platform.opentargets.org/",
+    },
+    {
+        "Dataset": "IUPHAR/BPS Guide to Pharmacology",
+        "Use in app": "Drug-target class annotations such as GPCRs, ion channels, nuclear receptors, and transporters.",
+        "Link": "https://www.guidetopharmacology.org/",
+    },
+    {
+        "Dataset": "CINDERellA Bayesian network outputs",
+        "Use in app": "Module-level and gene-level Bayesian network nodes, directed edges, and edge frequencies.",
+        "Link": "https://github.com/imsb-uke/CINDERellA",
+    },
+]
 
 TISSUE_COLORS = {
     "AC": "#1f77b4",
@@ -50,6 +63,7 @@ TISSUE_COLORS = {
     "phenotype": "#7b3f9b",
     "module": "#607d8b",
     "highlight": "#c44e52",
+    "filter": "#111827",
     "default": "#78909c",
 }
 
@@ -75,9 +89,11 @@ def load_tsv(path: str) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def load_gene_annotations(path: str) -> pd.DataFrame:
     df = load_tsv(path)
-    bool_cols = [col for col in THERAPEUTIC_CATEGORIES.values() if col and col in df.columns]
-    for col in bool_cols:
-        df[col] = df[col].fillna(False).astype(bool)
+    for _, col, _, _ in CATEGORY_SPECS:
+        if col in df:
+            df[col] = df[col].fillna(False).astype(bool)
+    if "open_targets_ad_score" in df:
+        df["open_targets_ad_score"] = pd.to_numeric(df["open_targets_ad_score"], errors="coerce").fillna(0.0)
     return df
 
 
@@ -100,12 +116,357 @@ def tissue_from_raw(raw_name: str) -> str:
     return text.rsplit("_", 1)[1] if "_" in text and not text.startswith("PHENO_") else ""
 
 
+def available_tissues(nodes: pd.DataFrame) -> list[str]:
+    values = sorted({tissue_from_raw(raw) for raw in nodes["raw_name"].astype(str) if tissue_from_raw(raw)})
+    return values
+
+
 def display_gene_label(raw_name: str, gene_ann: pd.DataFrame) -> str:
     base = gene_base(raw_name)
     row = gene_ann.loc[gene_ann["ensembl_gene_id_base"].eq(base)]
     symbol = row["hgnc_symbol"].iloc[0] if len(row) and pd.notna(row["hgnc_symbol"].iloc[0]) else str(raw_name).rsplit("_", 1)[0]
     tissue = tissue_from_raw(raw_name)
     return f"{symbol} ({tissue})" if tissue else str(symbol)
+
+
+def run_label(run: dict) -> str:
+    if "run_group" in run:
+        return f"{run['run_group']} / {run['module']} / {clean_phenotype(run['phenotype'])}"
+    return clean_phenotype(run["phenotype"])
+
+
+def combine_runs(run_items: list[dict], label: str) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+    node_records: dict[str, dict] = {}
+    edge_records = []
+
+    for run in run_items:
+        nodes = load_tsv(run["nodes"])
+        edges = load_tsv(run["edges"])
+        id_to_node = nodes.set_index(nodes["node_id"].astype(int)).to_dict("index")
+        source_label = run_label(run)
+
+        for _, row in nodes.iterrows():
+            raw = str(row["raw_name"])
+            if raw not in node_records:
+                node_records[raw] = {
+                    "raw_name": raw,
+                    "pretty_name": str(row["pretty_name"]),
+                    "is_phenotype": int(row["is_phenotype"]),
+                    "source_runs": set(),
+                }
+            node_records[raw]["source_runs"].add(source_label)
+
+        for _, edge in edges.iterrows():
+            src_id = int(edge["source_id"])
+            dst_id = int(edge["target_id"])
+            src = id_to_node.get(src_id)
+            dst = id_to_node.get(dst_id)
+            if src is None or dst is None:
+                continue
+            edge_records.append(
+                {
+                    "source_raw": str(src["raw_name"]),
+                    "target_raw": str(dst["raw_name"]),
+                    "source_name": str(src["pretty_name"]),
+                    "target_name": str(dst["pretty_name"]),
+                    "frequency": float(edge["frequency"]),
+                    "source_run": source_label,
+                }
+            )
+
+    ordered = sorted(node_records, key=lambda raw: (1 - int(node_records[raw]["is_phenotype"]), raw))
+    raw_to_id = {raw: idx + 1 for idx, raw in enumerate(ordered)}
+    combined_nodes = pd.DataFrame(
+        [
+            {
+                "node_id": raw_to_id[raw],
+                "raw_name": raw,
+                "pretty_name": node_records[raw]["pretty_name"],
+                "is_phenotype": node_records[raw]["is_phenotype"],
+                "source_runs": "; ".join(sorted(node_records[raw]["source_runs"])),
+            }
+            for raw in ordered
+        ]
+    )
+
+    if edge_records:
+        edge_df = pd.DataFrame(edge_records)
+        grouped = (
+            edge_df.groupby(["source_raw", "target_raw", "source_name", "target_name"], as_index=False)
+            .agg(
+                frequency=("frequency", "max"),
+                mean_frequency=("frequency", "mean"),
+                n_runs=("source_run", "nunique"),
+                source_runs=("source_run", lambda vals: "; ".join(sorted(set(vals)))),
+            )
+            .sort_values("frequency", ascending=False)
+        )
+        grouped["source_id"] = grouped["source_raw"].map(raw_to_id).astype(int)
+        grouped["target_id"] = grouped["target_raw"].map(raw_to_id).astype(int)
+        combined_edges = grouped[
+            [
+                "source_id",
+                "target_id",
+                "frequency",
+                "mean_frequency",
+                "n_runs",
+                "source_name",
+                "target_name",
+                "source_raw",
+                "target_raw",
+                "source_runs",
+            ]
+        ].copy()
+    else:
+        combined_edges = pd.DataFrame(columns=["source_id", "target_id", "frequency", "source_name", "target_name", "source_raw", "target_raw"])
+
+    meta = {
+        "phenotype": label,
+        "n_nodes": int(len(combined_nodes)),
+        "n_edges": int(len(combined_edges)),
+        "max_frequency": float(combined_edges["frequency"].max()) if len(combined_edges) else 0.0,
+        "id": label,
+    }
+    return combined_nodes, combined_edges, meta
+
+
+def edge_metrics(nodes: pd.DataFrame, edges: pd.DataFrame, threshold: float) -> pd.DataFrame:
+    nodes = nodes.copy()
+    nodes["node_id"] = nodes["node_id"].astype(int)
+    id_to_raw = dict(zip(nodes["node_id"], nodes["raw_name"].astype(str)))
+    id_to_pheno = dict(zip(nodes["node_id"], nodes["is_phenotype"].astype(int).eq(1)))
+    sub = edges[edges["frequency"] >= threshold].copy()
+    rows = []
+    for node_id in nodes["node_id"]:
+        incoming = sub[sub["target_id"].astype(int).eq(node_id)]
+        outgoing = sub[sub["source_id"].astype(int).eq(node_id)]
+        in_from_tissues = incoming["source_id"].astype(int).map(id_to_raw).map(tissue_from_raw)
+        out_to_tissues = outgoing["target_id"].astype(int).map(id_to_raw).map(tissue_from_raw)
+        to_pheno = outgoing["target_id"].astype(int).map(id_to_pheno).fillna(False)
+        from_pheno = incoming["source_id"].astype(int).map(id_to_pheno).fillna(False)
+        rows.append(
+            {
+                "node_id": int(node_id),
+                "in_edges": int(len(incoming)),
+                "out_edges": int(len(outgoing)),
+                "in_weight": float(incoming["frequency"].sum()) if len(incoming) else 0.0,
+                "out_weight": float(outgoing["frequency"].sum()) if len(outgoing) else 0.0,
+                "to_phenotype_edges": int(to_pheno.sum()),
+                "from_phenotype_edges": int(from_pheno.sum()),
+                "to_phenotype_weight": float(outgoing.loc[to_pheno.values, "frequency"].sum()) if len(outgoing) else 0.0,
+                "from_phenotype_weight": float(incoming.loc[from_pheno.values, "frequency"].sum()) if len(incoming) else 0.0,
+                "in_from_tissues": in_from_tissues.value_counts().to_dict(),
+                "out_to_tissues": out_to_tissues.value_counts().to_dict(),
+            }
+        )
+    metrics = pd.DataFrame(rows).set_index("node_id")
+    metrics["to_phenotype_out_fraction"] = metrics.apply(
+        lambda row: row["to_phenotype_weight"] / row["out_weight"] if row["out_weight"] else 0.0,
+        axis=1,
+    )
+    metrics["from_phenotype_in_fraction"] = metrics.apply(
+        lambda row: row["from_phenotype_weight"] / row["in_weight"] if row["in_weight"] else 0.0,
+        axis=1,
+    )
+    return metrics
+
+
+def category_value(row: pd.Series, category: str, ad_threshold: float) -> bool:
+    if category == "has_ad_evidence":
+        return float(row.get("open_targets_ad_score", 0.0) or 0.0) >= ad_threshold
+    return bool(row.get(category, False))
+
+
+def gene_annotation_row(raw: str, gene_ann: pd.DataFrame) -> pd.Series | None:
+    base = gene_base(raw)
+    rows = gene_ann[gene_ann["ensembl_gene_id_base"].eq(base)]
+    return rows.iloc[0] if len(rows) else None
+
+
+def module_annotation_row(pretty: str, module_ann: pd.DataFrame) -> pd.Series | None:
+    mod_id = module_number(pretty)
+    if mod_id is None or "cluster_id" not in module_ann:
+        return None
+    rows = module_ann[module_ann["cluster_id"].eq(mod_id)]
+    return rows.iloc[0] if len(rows) else None
+
+
+def node_condition_controls(prefix: str, nodes: pd.DataFrame, is_gene_level: bool) -> dict:
+    with st.expander("Node marking and filtering", expanded=False):
+        action = st.radio(
+            "Condition action",
+            ["Show all nodes", "Mark matching nodes", "Filter to matching nodes"],
+            horizontal=True,
+            key=f"{prefix}_condition_action",
+        )
+        selected_categories = st.multiselect(
+            "Therapeutic categories that must match",
+            [label for label, _, _, _ in CATEGORY_SPECS],
+            key=f"{prefix}_condition_categories",
+        )
+        min_in_edges = st.number_input("Minimum incoming edges", min_value=0, value=0, step=1, key=f"{prefix}_min_in")
+        min_out_edges = st.number_input("Minimum outgoing edges", min_value=0, value=0, step=1, key=f"{prefix}_min_out")
+        relation = st.selectbox(
+            "Phenotype relationship",
+            ["No phenotype-edge condition", "Parent of phenotype", "Child of phenotype", "Connected to phenotype"],
+            key=f"{prefix}_pheno_relation",
+        )
+        min_pheno_edges = st.number_input("Minimum phenotype-related edges", min_value=0, value=0, step=1, key=f"{prefix}_min_pheno")
+
+        tissues = available_tissues(nodes)
+        selected_tissues = []
+        incoming_from_tissues = []
+        outgoing_to_tissues = []
+        if is_gene_level and tissues:
+            selected_tissues = st.multiselect("Gene tissues that must match", tissues, key=f"{prefix}_node_tissues")
+            incoming_from_tissues = st.multiselect("Require incoming edges from tissues", tissues, key=f"{prefix}_in_tissues")
+            outgoing_to_tissues = st.multiselect("Require outgoing edges to tissues", tissues, key=f"{prefix}_out_tissues")
+
+        module_tissues = []
+        min_category_fraction = 0.0
+        min_to_pheno_fraction = 0.0
+        min_from_pheno_fraction = 0.0
+        if not is_gene_level:
+            module_tissues = st.multiselect("Module contains tissue label", ["AC", "MFBA9BA46", "PCGBA23"], key=f"{prefix}_module_tissues")
+            min_category_fraction = st.slider("Minimum selected-category gene fraction in module", 0.0, 1.0, 0.0, 0.01, key=f"{prefix}_min_cat_frac")
+            min_to_pheno_fraction = st.slider("Minimum outgoing-weight fraction to phenotype nodes", 0.0, 1.0, 0.0, 0.01, key=f"{prefix}_to_pheno_frac")
+            min_from_pheno_fraction = st.slider("Minimum incoming-weight fraction from phenotype nodes", 0.0, 1.0, 0.0, 0.01, key=f"{prefix}_from_pheno_frac")
+
+    return {
+        "action": action,
+        "categories": [THERAPEUTIC_CATEGORIES[label] for label in selected_categories],
+        "selected_tissues": selected_tissues,
+        "incoming_from_tissues": incoming_from_tissues,
+        "outgoing_to_tissues": outgoing_to_tissues,
+        "min_in_edges": int(min_in_edges),
+        "min_out_edges": int(min_out_edges),
+        "relation": relation,
+        "min_pheno_edges": int(min_pheno_edges),
+        "module_tissues": module_tissues,
+        "min_category_fraction": float(min_category_fraction),
+        "min_to_pheno_fraction": float(min_to_pheno_fraction),
+        "min_from_pheno_fraction": float(min_from_pheno_fraction),
+    }
+
+
+def condition_matches(
+    nodes: pd.DataFrame,
+    edges: pd.DataFrame,
+    threshold: float,
+    conditions: dict,
+    gene_ann: pd.DataFrame,
+    module_ann: pd.DataFrame,
+    ad_threshold: float,
+    is_gene_level: bool,
+) -> set[int]:
+    if conditions["action"] == "Show all nodes":
+        return set()
+
+    metrics = edge_metrics(nodes, edges, threshold)
+    matches: set[int] = set()
+    for _, row in nodes.iterrows():
+        node_id = int(row["node_id"])
+        is_pheno = bool(int(row["is_phenotype"]))
+        if is_pheno:
+            continue
+
+        ok = True
+        raw = str(row["raw_name"])
+        pretty = str(row["pretty_name"])
+        metric = metrics.loc[node_id]
+
+        if metric["in_edges"] < conditions["min_in_edges"] or metric["out_edges"] < conditions["min_out_edges"]:
+            ok = False
+
+        if conditions["relation"] != "No phenotype-edge condition":
+            if conditions["relation"] == "Parent of phenotype":
+                rel_count = metric["to_phenotype_edges"]
+            elif conditions["relation"] == "Child of phenotype":
+                rel_count = metric["from_phenotype_edges"]
+            else:
+                rel_count = metric["to_phenotype_edges"] + metric["from_phenotype_edges"]
+            if rel_count < max(1, conditions["min_pheno_edges"]):
+                ok = False
+
+        if is_gene_level:
+            if conditions["selected_tissues"] and tissue_from_raw(raw) not in conditions["selected_tissues"]:
+                ok = False
+            if conditions["incoming_from_tissues"]:
+                in_counts = metric["in_from_tissues"]
+                if not any(in_counts.get(tissue, 0) > 0 for tissue in conditions["incoming_from_tissues"]):
+                    ok = False
+            if conditions["outgoing_to_tissues"]:
+                out_counts = metric["out_to_tissues"]
+                if not any(out_counts.get(tissue, 0) > 0 for tissue in conditions["outgoing_to_tissues"]):
+                    ok = False
+            ann = gene_annotation_row(raw, gene_ann)
+            if conditions["categories"]:
+                if ann is None or not all(category_value(ann, category, ad_threshold) for category in conditions["categories"]):
+                    ok = False
+        else:
+            ann = module_annotation_row(pretty, module_ann)
+            if conditions["module_tissues"] and ann is not None:
+                tissue_text = str(ann.get("tissues", ""))
+                if not any(tissue in tissue_text for tissue in conditions["module_tissues"]):
+                    ok = False
+            elif conditions["module_tissues"]:
+                ok = False
+            if conditions["categories"]:
+                if ann is None:
+                    ok = False
+                else:
+                    for category in conditions["categories"]:
+                        count_col = MODULE_COUNT_BY_GENE.get(category)
+                        frac_col = MODULE_FRAC_BY_GENE.get(category)
+                        count = float(ann.get(count_col, 0.0) or 0.0)
+                        frac = float(ann.get(frac_col, 0.0) or 0.0)
+                        if count <= 0 or frac < conditions["min_category_fraction"]:
+                            ok = False
+            if metric["to_phenotype_out_fraction"] < conditions["min_to_pheno_fraction"]:
+                ok = False
+            if metric["from_phenotype_in_fraction"] < conditions["min_from_pheno_fraction"]:
+                ok = False
+
+        if ok:
+            matches.add(node_id)
+    return matches
+
+
+def apply_node_filter(nodes: pd.DataFrame, edges: pd.DataFrame, matching_ids: set[int], action: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    if action != "Filter to matching nodes" or not matching_ids:
+        return nodes, edges
+    phenotype_ids = set(nodes.loc[nodes["is_phenotype"].astype(int).eq(1), "node_id"].astype(int))
+    keep = matching_ids | phenotype_ids
+    filtered_edges = edges[edges["source_id"].astype(int).isin(keep) & edges["target_id"].astype(int).isin(keep)].copy()
+    connected = set(filtered_edges["source_id"].astype(int)) | set(filtered_edges["target_id"].astype(int))
+    keep = keep & (connected | matching_ids)
+    filtered_nodes = nodes[nodes["node_id"].astype(int).isin(keep)].copy()
+    return filtered_nodes, filtered_edges
+
+
+def category_hover_lines_for_gene(ann: pd.Series, ad_threshold: float) -> list[str]:
+    lines = []
+    for label, gene_col, _, _ in CATEGORY_SPECS:
+        if gene_col == "has_ad_evidence":
+            score = float(ann.get("open_targets_ad_score", 0.0) or 0.0)
+            value = score >= ad_threshold
+            lines.append(f"{label}: {'yes' if value else 'no'}; score {score:.3f}; threshold {ad_threshold:.3f}")
+        else:
+            lines.append(f"{label}: {'yes' if bool(ann.get(gene_col, False)) else 'no'}")
+    return lines
+
+
+def category_hover_lines_for_module(ann: pd.Series, ad_threshold: float) -> list[str]:
+    total = float(ann.get("unique_genes", 0.0) or 0.0)
+    lines = []
+    for label, gene_col, count_col, frac_col in CATEGORY_SPECS:
+        count = float(ann.get(count_col, 0.0) or 0.0)
+        frac = float(ann.get(frac_col, count / total if total else 0.0) or 0.0)
+        if gene_col == "has_ad_evidence":
+            lines.append(f"{label}: {int(count)} genes; fraction {frac:.3f}; gene-score threshold {ad_threshold:.3f}")
+        else:
+            lines.append(f"{label}: {int(count)} genes; fraction {frac:.3f}")
+    return lines
 
 
 def build_network_figure(
@@ -116,8 +477,11 @@ def build_network_figure(
     gene_ann: pd.DataFrame,
     module_ann: pd.DataFrame,
     title: str,
+    ad_threshold: float,
+    marked_ids: set[int] | None = None,
     max_edges: int = 250,
 ) -> go.Figure:
+    marked_ids = marked_ids or set()
     nodes = nodes.copy()
     edges = edges[edges["frequency"] >= threshold].copy()
     if edges.empty:
@@ -126,23 +490,30 @@ def build_network_figure(
         return fig
     edges = edges.sort_values("frequency", ascending=False).head(max_edges)
 
-    id_to_name = dict(zip(nodes["node_id"].astype(int), nodes["pretty_name"].astype(str)))
-    id_to_raw = dict(zip(nodes["node_id"].astype(int), nodes["raw_name"].astype(str)))
     keep_ids = set(edges["source_id"].astype(int)) | set(edges["target_id"].astype(int))
     nodes = nodes[nodes["node_id"].astype(int).isin(keep_ids)].copy()
 
     graph = nx.DiGraph()
     for _, row in nodes.iterrows():
-        node_id = int(row["node_id"])
-        raw = str(row["raw_name"])
-        pretty = str(row["pretty_name"])
-        is_pheno = bool(int(row["is_phenotype"]))
-        graph.add_node(node_id, raw=raw, pretty=pretty, is_phenotype=is_pheno)
+        graph.add_node(
+            int(row["node_id"]),
+            raw=str(row["raw_name"]),
+            pretty=str(row["pretty_name"]),
+            is_phenotype=bool(int(row["is_phenotype"])),
+            source_runs=str(row.get("source_runs", "")),
+        )
     for _, row in edges.iterrows():
         src = int(row["source_id"])
         dst = int(row["target_id"])
         if src in graph and dst in graph:
-            graph.add_edge(src, dst, weight=float(row["frequency"]))
+            graph.add_edge(
+                src,
+                dst,
+                weight=float(row["frequency"]),
+                mean_weight=float(row.get("mean_frequency", row["frequency"])),
+                n_runs=int(row.get("n_runs", 1)),
+                source_runs=str(row.get("source_runs", "")),
+            )
 
     if not graph.nodes:
         return go.Figure()
@@ -187,19 +558,21 @@ def build_network_figure(
             )
         )
 
-    node_x, node_y, labels, hovers, colors, sizes, symbols = [], [], [], [], [], [], []
+    node_x, node_y, labels, hovers, colors, sizes, symbols, line_widths = [], [], [], [], [], [], [], []
+    metrics = edge_metrics(nodes, edges, threshold)
     for node_id, attrs in graph.nodes(data=True):
         x, y = pos[node_id]
         raw = attrs["raw"]
         pretty = attrs["pretty"]
         is_pheno = attrs["is_phenotype"]
+        metric = metrics.loc[node_id] if node_id in metrics.index else None
         node_x.append(x)
         node_y.append(y)
 
         if is_pheno:
             label = clean_phenotype(pretty)
             color = TISSUE_COLORS["phenotype"]
-            size = 32
+            size = 34
             symbol = "diamond"
             hover = f"<b>{label}</b><br>Phenotype"
         elif pretty.startswith("M") or pretty.startswith("ME_"):
@@ -209,18 +582,18 @@ def build_network_figure(
             size = 22
             symbol = "circle"
             hover = f"<b>{label}</b><br>Module"
-            if mod_id is not None and category:
-                row = module_ann[module_ann["cluster_id"].eq(mod_id)]
-                count_col = MODULE_CATEGORY_COUNT.get(category)
-                if len(row) and count_col in row:
-                    count = int(row[count_col].fillna(0).iloc[0])
-                    total = int(row.get("unique_genes", pd.Series([0])).fillna(0).iloc[0])
-                    hover += f"<br>{count_col}: {count}"
-                    if total:
-                        hover += f" / {total}"
+            ann = module_annotation_row(pretty, module_ann)
+            if ann is not None:
+                total = int(ann.get("unique_genes", 0) or 0)
+                hover += f"<br>Unique genes: {total}"
+                if "tissues" in ann:
+                    hover += f"<br>Tissues: {ann.get('tissues')}"
+                hover += "<br>" + "<br>".join(category_hover_lines_for_module(ann, ad_threshold))
+                if category:
+                    count = float(ann.get(MODULE_COUNT_BY_GENE.get(category), 0.0) or 0.0)
                     if count > 0:
                         color = TISSUE_COLORS["highlight"]
-                        size = 26
+                        size = 27
         else:
             label = display_gene_label(raw, gene_ann)
             tissue = tissue_from_raw(raw)
@@ -228,22 +601,35 @@ def build_network_figure(
             size = 18
             symbol = "circle"
             base = gene_base(raw)
-            ann_row = gene_ann[gene_ann["ensembl_gene_id_base"].eq(base)]
-            hover = f"<b>{label}</b><br>{base}"
-            if len(ann_row):
-                cats = ann_row["target_categories"].fillna("").iloc[0]
-                score = ann_row["therapeutic_target_score"].fillna(0).iloc[0]
-                ad = ann_row["open_targets_ad_score"].fillna(0).iloc[0]
-                hover += f"<br>Categories: {cats or 'none'}<br>Therapeutic score: {score}<br>Open Targets AD score: {float(ad):.3f}"
-                if category and category in ann_row and bool(ann_row[category].iloc[0]):
+            ann = gene_annotation_row(raw, gene_ann)
+            hover = f"<b>{label}</b><br>{base}<br>Tissue: {tissue or 'none'}"
+            if ann is not None:
+                cats = ann.get("target_categories", "")
+                score = ann.get("therapeutic_target_score", 0)
+                hover += f"<br>Categories text: {cats or 'none'}<br>Therapeutic target score: {score}"
+                hover += "<br>" + "<br>".join(category_hover_lines_for_gene(ann, ad_threshold))
+                if category and category_value(ann, category, ad_threshold):
                     color = TISSUE_COLORS["highlight"]
                     size = 24
+
+        if metric is not None:
+            hover += (
+                f"<br>Incoming edges: {int(metric['in_edges'])}; outgoing edges: {int(metric['out_edges'])}"
+                f"<br>To phenotype edges: {int(metric['to_phenotype_edges'])}; from phenotype edges: {int(metric['from_phenotype_edges'])}"
+            )
+        if attrs.get("source_runs"):
+            hover += f"<br>Runs: {attrs['source_runs']}"
+        if node_id in marked_ids:
+            hover += "<br><b>Matches selected node conditions</b>"
+            color = TISSUE_COLORS["filter"]
+            size = max(size, 28)
 
         labels.append(label)
         hovers.append(hover)
         colors.append(color)
         sizes.append(size)
         symbols.append(symbol)
+        line_widths.append(3.2 if node_id in marked_ids else 1.5)
 
     fig = go.Figure()
     fig.add_trace(
@@ -282,7 +668,7 @@ def build_network_figure(
                 size=sizes,
                 color=colors,
                 symbol=symbols,
-                line=dict(width=1.5, color="#ffffff"),
+                line=dict(width=line_widths, color="#ffffff"),
             ),
             showlegend=False,
         )
@@ -318,39 +704,78 @@ def edge_heatmap(nodes: pd.DataFrame, edges: pd.DataFrame, threshold: float, max
     return fig
 
 
-def driver_bar(edges: pd.DataFrame, nodes: pd.DataFrame, phenotype: str, top_n: int = 25) -> go.Figure:
-    pheno_rows = nodes[nodes["pretty_name"].astype(str).eq(phenotype)]
-    if pheno_rows.empty:
-        pheno_rows = nodes[nodes["raw_name"].astype(str).eq(phenotype)]
-    if pheno_rows.empty:
-        return go.Figure().update_layout(title="No phenotype node found")
-    pheno_id = int(pheno_rows["node_id"].iloc[0])
+def driver_bar(edges: pd.DataFrame, nodes: pd.DataFrame, phenotype: str | None = None, top_n: int = 25) -> go.Figure:
     id_to_name = dict(zip(nodes["node_id"].astype(int), nodes["pretty_name"].astype(str)))
-    sub = edges[edges["target_id"].astype(int).eq(pheno_id)].copy()
+    phenotype_ids = set(nodes.loc[nodes["is_phenotype"].astype(int).eq(1), "node_id"].astype(int))
+    if phenotype:
+        pheno_rows = nodes[nodes["pretty_name"].astype(str).eq(phenotype)]
+        if pheno_rows.empty:
+            pheno_rows = nodes[nodes["raw_name"].astype(str).eq(phenotype)]
+        if pheno_rows.empty:
+            return go.Figure().update_layout(title="No phenotype node found")
+        phenotype_ids = {int(pheno_rows["node_id"].iloc[0])}
+
+    sub = edges[edges["target_id"].astype(int).isin(phenotype_ids)].copy()
     if sub.empty:
         return go.Figure().update_layout(title="No incoming edges to phenotype")
     sub["source"] = sub["source_id"].astype(int).map(id_to_name)
+    sub["phenotype"] = sub["target_id"].astype(int).map(id_to_name).map(clean_phenotype)
+    sub["driver"] = sub["source"] + " -> " + sub["phenotype"]
     sub = sub.sort_values("frequency", ascending=False).head(top_n)
-    fig = px.bar(sub.iloc[::-1], x="frequency", y="source", orientation="h", labels={"frequency": "Edge frequency", "source": ""})
-    fig.update_layout(height=520, title=f"Top incoming drivers to {clean_phenotype(phenotype)}", margin=dict(l=10, r=10, t=55, b=10))
+    fig = px.bar(sub.iloc[::-1], x="frequency", y="driver", orientation="h", labels={"frequency": "Edge frequency", "driver": ""})
+    title = "Top incoming drivers to selected phenotype nodes" if phenotype is None else f"Top incoming drivers to {clean_phenotype(phenotype)}"
+    fig.update_layout(height=520, title=title, margin=dict(l=10, r=10, t=55, b=10))
     return fig
 
 
-def run_module_view(manifest: dict, category_key: str | None, module_ann: pd.DataFrame, gene_ann: pd.DataFrame) -> None:
+def prepare_network_for_view(
+    nodes: pd.DataFrame,
+    edges: pd.DataFrame,
+    threshold: float,
+    conditions: dict,
+    gene_ann: pd.DataFrame,
+    module_ann: pd.DataFrame,
+    ad_threshold: float,
+    is_gene_level: bool,
+) -> tuple[pd.DataFrame, pd.DataFrame, set[int]]:
+    matched = condition_matches(nodes, edges, threshold, conditions, gene_ann, module_ann, ad_threshold, is_gene_level)
+    filtered_nodes, filtered_edges = apply_node_filter(nodes, edges, matched, conditions["action"])
+    if conditions["action"] == "Filter to matching nodes":
+        matched = matched & set(filtered_nodes["node_id"].astype(int))
+    return filtered_nodes, filtered_edges, matched
+
+
+def run_module_view(manifest: dict, category_key: str | None, module_ann: pd.DataFrame, gene_ann: pd.DataFrame, ad_threshold: float) -> None:
     runs = manifest["module_runs"]
-    run_labels = {clean_phenotype(run["phenotype"]): run for run in runs}
-    selected_label = st.selectbox("Phenotype", sorted(run_labels), key="module_pheno")
-    run = run_labels[selected_label]
-    nodes = load_tsv(run["nodes"])
-    edges = load_tsv(run["edges"])
+    labels = {run_label(run): run for run in runs}
+    mode = st.radio("Phenotype display", ["Single phenotype", "Phenotype combination"], horizontal=True, key="module_combo_mode")
+    if mode == "Single phenotype":
+        selected_label = st.selectbox("Phenotype", sorted(labels), key="module_pheno")
+        run = labels[selected_label]
+        nodes = load_tsv(run["nodes"])
+        edges = load_tsv(run["edges"])
+        active_label = selected_label
+        driver_pheno = run["phenotype"]
+    else:
+        defaults = sorted(labels)[: min(3, len(labels))]
+        selected = st.multiselect("Phenotypes to combine", sorted(labels), default=defaults, key="module_pheno_combo")
+        if not selected:
+            st.info("Select at least one phenotype to combine.")
+            return
+        nodes, edges, run = combine_runs([labels[item] for item in selected], "combined_module_phenotypes")
+        active_label = " + ".join(selected)
+        driver_pheno = None
 
     threshold = st.slider("Edge frequency threshold", 0.0, 1.0, 0.05, 0.005, key="module_threshold")
-    max_edges = st.slider("Maximum displayed edges", 25, 500, 180, 25, key="module_max_edges")
+    max_edges = st.slider("Maximum displayed edges", 25, 700, 220, 25, key="module_max_edges")
+    conditions = node_condition_controls("module", nodes, is_gene_level=False)
+    nodes, edges, marked = prepare_network_for_view(nodes, edges, threshold, conditions, gene_ann, module_ann, ad_threshold, is_gene_level=False)
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
     c1.metric("Nodes", f"{len(nodes):,}")
     c2.metric("Edges", f"{len(edges):,}")
     c3.metric("Edges above threshold", f"{int((edges['frequency'] >= threshold).sum()):,}")
+    c4.metric("Marked nodes", f"{len(marked):,}")
 
     fig = build_network_figure(
         nodes,
@@ -359,14 +784,16 @@ def run_module_view(manifest: dict, category_key: str | None, module_ann: pd.Dat
         category_key,
         gene_ann,
         module_ann,
-        title=f"Module-level BN: {manifest['label']} / {selected_label}",
+        title=f"Module-level BN: {manifest['label']} / {active_label}",
+        ad_threshold=ad_threshold,
+        marked_ids=marked,
         max_edges=max_edges,
     )
     st.plotly_chart(fig, use_container_width=True)
 
     tab1, tab2, tab3 = st.tabs(["Drivers", "Heatmap", "Selection table"])
     with tab1:
-        st.plotly_chart(driver_bar(edges, nodes, run["phenotype"], top_n=30), use_container_width=True)
+        st.plotly_chart(driver_bar(edges, nodes, driver_pheno, top_n=35), use_container_width=True)
     with tab2:
         st.plotly_chart(edge_heatmap(nodes, edges, threshold), use_container_width=True)
     with tab3:
@@ -380,28 +807,40 @@ def run_module_view(manifest: dict, category_key: str | None, module_ann: pd.Dat
             st.info("No selection table was available in this snapshot.")
 
 
-def run_gene_view(manifest: dict, category_key: str | None, module_ann: pd.DataFrame, gene_ann: pd.DataFrame) -> None:
+def run_gene_view(manifest: dict, category_key: str | None, module_ann: pd.DataFrame, gene_ann: pd.DataFrame, ad_threshold: float) -> None:
     runs = manifest["gene_runs"]
     if not runs:
         st.info("No gene-level BN runs were found in this dataset snapshot.")
         return
-    labels = {
-        f"{run['run_group']} / {run['module']} / {clean_phenotype(run['phenotype'])}": run
-        for run in runs
-    }
-    selected = st.selectbox("Gene-level run", sorted(labels), key="gene_run")
-    run = labels[selected]
-    nodes = load_tsv(run["nodes"])
-    edges = load_tsv(run["edges"])
+    labels = {run_label(run): run for run in runs}
+    mode = st.radio("Gene-run display", ["Single run", "Run combination"], horizontal=True, key="gene_combo_mode")
+    if mode == "Single run":
+        selected = st.selectbox("Gene-level run", sorted(labels), key="gene_run")
+        run = labels[selected]
+        nodes = load_tsv(run["nodes"])
+        edges = load_tsv(run["edges"])
+        active_label = selected
+        driver_pheno = run["phenotype"]
+    else:
+        defaults = sorted(labels)[: min(3, len(labels))]
+        selected_runs = st.multiselect("Gene-level runs to combine", sorted(labels), default=defaults, key="gene_run_combo")
+        if not selected_runs:
+            st.info("Select at least one gene-level run to combine.")
+            return
+        nodes, edges, run = combine_runs([labels[item] for item in selected_runs], "combined_gene_runs")
+        active_label = " + ".join(selected_runs)
+        driver_pheno = None
 
     threshold = st.slider("Edge frequency threshold", 0.0, 1.0, 0.05, 0.005, key="gene_threshold")
-    max_edges = st.slider("Maximum displayed edges", 25, 500, 180, 25, key="gene_max_edges")
+    max_edges = st.slider("Maximum displayed edges", 25, 700, 220, 25, key="gene_max_edges")
+    conditions = node_condition_controls("gene", nodes, is_gene_level=True)
+    nodes, edges, marked = prepare_network_for_view(nodes, edges, threshold, conditions, gene_ann, module_ann, ad_threshold, is_gene_level=True)
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Nodes", f"{len(nodes):,}")
     c2.metric("Edges", f"{len(edges):,}")
     c3.metric("Edges above threshold", f"{int((edges['frequency'] >= threshold).sum()):,}")
-    c4.metric("Max edge frequency", f"{edges['frequency'].max():.3f}" if len(edges) else "0")
+    c4.metric("Marked nodes", f"{len(marked):,}")
 
     fig = build_network_figure(
         nodes,
@@ -410,14 +849,16 @@ def run_gene_view(manifest: dict, category_key: str | None, module_ann: pd.DataF
         category_key,
         gene_ann,
         module_ann,
-        title=f"Gene-level BN: {selected}",
+        title=f"Gene-level BN: {active_label}",
+        ad_threshold=ad_threshold,
+        marked_ids=marked,
         max_edges=max_edges,
     )
     st.plotly_chart(fig, use_container_width=True)
 
     tab1, tab2, tab3 = st.tabs(["Phenotype drivers", "Heatmap", "Node annotations"])
     with tab1:
-        st.plotly_chart(driver_bar(edges, nodes, run["phenotype"], top_n=30), use_container_width=True)
+        st.plotly_chart(driver_bar(edges, nodes, driver_pheno, top_n=35), use_container_width=True)
     with tab2:
         st.plotly_chart(edge_heatmap(nodes, edges, threshold), use_container_width=True)
     with tab3:
@@ -425,17 +866,37 @@ def run_gene_view(manifest: dict, category_key: str | None, module_ann: pd.DataF
         for _, row in nodes[nodes["is_phenotype"].astype(int).eq(0)].iterrows():
             raw = str(row["raw_name"])
             base = gene_base(raw)
-            ann = gene_ann[gene_ann["ensembl_gene_id_base"].eq(base)]
+            ann = gene_annotation_row(raw, gene_ann)
             record = {"node": raw, "label": display_gene_label(raw, gene_ann), "gene_base": base, "tissue": tissue_from_raw(raw)}
-            if len(ann):
+            if ann is not None:
                 for col in ["hgnc_symbol", "hgnc_name", "target_categories", "therapeutic_target_score", "open_targets_ad_score"]:
                     if col in ann:
-                        record[col] = ann[col].iloc[0]
-                for col in THERAPEUTIC_CATEGORIES.values():
-                    if col and col in ann:
-                        record[col] = bool(ann[col].iloc[0])
+                        record[col] = ann[col]
+                for _, col, _, _ in CATEGORY_SPECS:
+                    if col in ann:
+                        record[col] = category_value(ann, col, ad_threshold)
             ann_rows.append(record)
         st.dataframe(pd.DataFrame(ann_rows), use_container_width=True, height=500)
+
+
+def render_source_info() -> None:
+    with st.expander("Annotation dataset sources", expanded=False):
+        st.markdown(
+            "Therapeutic annotations in this app are copied from the local `target_annotations` folder into the project data snapshot. "
+            "The compact tables used by the app are `gene_target_annotations_compact.tsv` and `module_target_summary_level4.tsv`."
+        )
+        source_df = pd.DataFrame(DATASET_SOURCES)
+        st.dataframe(
+            source_df,
+            use_container_width=True,
+            hide_index=True,
+            column_config={"Link": st.column_config.LinkColumn("Link")},
+        )
+        st.markdown(
+            "Alzheimer evidence is thresholded interactively from `open_targets_ad_score`. "
+            "The raw `has_ad_evidence` flag in the snapshot corresponds to genes with nonzero Open Targets AD evidence, "
+            "but the app can mark/filter genes using a stricter score cutoff."
+        )
 
 
 def main() -> None:
@@ -454,20 +915,21 @@ def main() -> None:
         st.title("CINDERellA")
         dataset_label = st.selectbox("Results folder", list(dataset_options))
         view = st.radio("Result level", ["Module-level", "Gene-level"], horizontal=False)
-        category_label = st.selectbox("Therapeutic annotation", list(THERAPEUTIC_CATEGORIES))
+        category_label = st.selectbox("Therapeutic annotation to color", list(THERAPEUTIC_CATEGORIES))
         category_key = THERAPEUTIC_CATEGORIES[category_label]
+        ad_threshold = st.slider("Open Targets AD score threshold", 0.0, 1.0, 0.05, 0.005)
 
     manifest = load_manifest(dataset_options[dataset_label]["manifest"])
 
     st.title("CINDERellA Bayesian Network Results")
     st.caption(manifest["source_path"])
+    render_source_info()
 
     if view == "Module-level":
-        run_module_view(manifest, category_key, module_ann, gene_ann)
+        run_module_view(manifest, category_key, module_ann, gene_ann, ad_threshold)
     else:
-        run_gene_view(manifest, category_key, module_ann, gene_ann)
+        run_gene_view(manifest, category_key, module_ann, gene_ann, ad_threshold)
 
 
 if __name__ == "__main__":
     main()
-

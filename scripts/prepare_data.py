@@ -205,16 +205,27 @@ def write_target_snapshot() -> None:
     keep_cluster_cols = [
         "cluster_id",
         "unique_genes",
+        "tissues",
         "n_kinase",
+        "frac_kinase",
         "n_GPCR",
+        "frac_GPCR",
         "n_ion_channel",
+        "frac_ion_channel",
         "n_nuclear_receptor",
+        "frac_nuclear_receptor",
         "n_transporter",
+        "frac_transporter",
         "n_enzyme",
+        "frac_enzyme",
         "n_receptor",
+        "frac_receptor",
         "n_transcription_factor",
+        "frac_transcription_factor",
         "n_known_drug_target",
+        "frac_known_drug_target",
         "n_Alzheimer_evidence",
+        "frac_Alzheimer_evidence",
         "n_any_therapeutic_category",
         "frac_any_therapeutic_category",
         "target_category_score",
@@ -254,4 +265,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
