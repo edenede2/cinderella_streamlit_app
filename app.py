@@ -1258,7 +1258,7 @@ def run_gene_view(manifest: dict, category_key: str | None, module_ann: pd.DataF
     with tab1:
         st.plotly_chart(driver_bar(edges, nodes, driver_pheno, top_n=35, gene_ann=gene_ann), use_container_width=True)
     with tab2:
-        st.plotly_chart(edge_heatmap(nodes, edges, threshold), use_container_width=True)
+        st.plotly_chart(edge_heatmap(nodes, edges, threshold, gene_ann=gene_ann), use_container_width=True)
     with tab3:
         ann_rows = []
         for _, row in nodes[nodes["is_phenotype"].astype(int).eq(0)].iterrows():
