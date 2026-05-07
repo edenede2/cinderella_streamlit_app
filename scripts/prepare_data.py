@@ -30,6 +30,8 @@ SOURCE_DATASETS = {
     "muscles_therapeutic_targets": {
         "label": "Muscle tissues therapeutic target selected modules",
         "path": EDEN / "CINDERellA/notebooks/results/se2_3_muscles_parallel_phenos_therapeutic_targets",
+        "module_target_dir": EDEN / "inter-tissue-CoExpression/data/proccessed/M5_all_genes_muscles/target_annotations",
+        "module_details": EDEN / "inter-tissue-CoExpression/data/proccessed/M5_all_genes_muscles/M5_all_genes_details_4.csv",
     },
 }
 
@@ -39,6 +41,7 @@ TARGET_DIR = (
     / "se2_rosmap_full_signed_alt/target_annotations"
 )
 SOURCE_ROOT = TARGET_DIR.parent
+DEFAULT_MODULE_DETAILS = SOURCE_ROOT / "se2_details_filtered_4.csv"
 
 
 def copy_file(src: Path, dst: Path) -> bool:
@@ -140,74 +143,9 @@ def copy_gene_runs(src_root: Path, dst_root: Path) -> list[dict]:
     return runs
 
 
-def copy_dataset(slug: str, spec: dict) -> dict:
-    src = spec["path"]
-    dst = DATA_ROOT / "datasets" / slug
-    dst.mkdir(parents=True, exist_ok=True)
-
-    manifest = {
-        "slug": slug,
-        "label": spec["label"],
-        "source_path": str(src),
-        "module_runs": [],
-        "gene_runs": [],
-        "tables": {},
-    }
-
-    table_sources = {
-        "all_phenotypes_edge_summary": src / "all_phenotypes_edge_summary.tsv",
-        "normality": src / "normality_test_results.tsv",
-        "selected_modules": src / "reduced_modules/reduced_modules_table.tsv",
-        "all_module_phenotype_correlations": src / "reduced_modules/all_module_phenotype_correlations.tsv",
-        "driver_genes_all_phenotypes": src / "gene_level_BN/driver_genes_all_phenotypes.tsv",
-        "driver_genes_therapeutic": src / "gene_level_BN/visualizations_therapeutic/driver_genes_therapeutic_summary.tsv",
-        "driver_genes_summary": src / "gene_level_BN/visualizations_gene_symbols/driver_genes_summary.tsv",
-    }
-    for key, path in table_sources.items():
-        if copy_file(path, dst / "tables" / path.name):
-            manifest["tables"][key] = str((dst / "tables" / path.name).relative_to(DATA_ROOT))
-
-    for run_dir in sorted((src / "cinderella_final").glob("PHENO_*")):
-        bundle = write_edge_bundle(run_dir, dst / "module_runs" / run_dir.name)
-        if bundle is None:
-            continue
-        bundle["id"] = run_dir.name
-        manifest["module_runs"].append(bundle)
-
-    manifest["gene_runs"] = copy_gene_runs(src, dst)
-    (dst / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    return manifest
-
-
-def write_target_snapshot() -> None:
-    dst = DATA_ROOT / "target_annotations"
-    dst.mkdir(parents=True, exist_ok=True)
-
-    gene_ann = pd.read_csv(TARGET_DIR / "gene_target_annotations.tsv", sep="\t", low_memory=False)
-    keep_gene_cols = [
-        "ensembl_gene_id_base",
-        "hgnc_symbol",
-        "hgnc_name",
-        "open_targets_ad_score",
-        "open_targets_ad_datasources",
-        "is_kinase",
-        "is_gPCR",
-        "is_ion_channel",
-        "is_nuclear_receptor",
-        "is_transporter",
-        "is_enzyme",
-        "is_receptor",
-        "is_transcription_factor",
-        "is_known_drug_target",
-        "has_ad_evidence",
-        "target_categories",
-        "therapeutic_target_score",
-    ]
-    gene_ann = gene_ann[[c for c in keep_gene_cols if c in gene_ann.columns]].copy()
-    gene_ann.to_csv(dst / "gene_target_annotations_compact.tsv", sep="\t", index=False)
-
-    cluster = pd.read_csv(TARGET_DIR / "se2_cluster_target_summary_level4.tsv", sep="\t", low_memory=False)
-    details = pd.read_csv(SOURCE_ROOT / "se2_details_filtered_4.csv")
+def build_module_target_snapshot(target_dir: Path, details_path: Path) -> pd.DataFrame:
+    cluster = pd.read_csv(target_dir / "se2_cluster_target_summary_level4.tsv", sep="\t", low_memory=False)
+    details = pd.read_csv(details_path)
     details = details.rename(
         columns={
             "Cluster ID": "cluster_id",
@@ -220,6 +158,7 @@ def write_target_snapshot() -> None:
         "cluster_id",
         "cluster_size",
         "original_cluster_type",
+        "Cluster Tissues",
         "dominant_tissue",
     }
     tissue_cols = []
@@ -238,7 +177,7 @@ def write_target_snapshot() -> None:
         {True: "Tissue specific", False: "Cross tissue"}
     )
     for col in tissue_cols:
-        details[f"frac_{col}"] = details[col] / pd.to_numeric(details["cluster_size"], errors="coerce").replace(0, pd.NA)
+        details[f"frac_{col}"] = details[col] / cluster_size
     detail_keep = [
         "cluster_id",
         "cluster_size",
@@ -289,7 +228,84 @@ def write_target_snapshot() -> None:
         "representative_target_genes",
         "target_rank",
     ]
-    cluster = cluster[[c for c in keep_cluster_cols if c in cluster.columns]].copy()
+    return cluster[[c for c in keep_cluster_cols if c in cluster.columns]].copy()
+
+
+def copy_dataset(slug: str, spec: dict) -> dict:
+    src = spec["path"]
+    dst = DATA_ROOT / "datasets" / slug
+    dst.mkdir(parents=True, exist_ok=True)
+
+    manifest = {
+        "slug": slug,
+        "label": spec["label"],
+        "source_path": str(src),
+        "module_runs": [],
+        "gene_runs": [],
+        "tables": {},
+    }
+
+    table_sources = {
+        "all_phenotypes_edge_summary": src / "all_phenotypes_edge_summary.tsv",
+        "normality": src / "normality_test_results.tsv",
+        "selected_modules": src / "reduced_modules/reduced_modules_table.tsv",
+        "all_module_phenotype_correlations": src / "reduced_modules/all_module_phenotype_correlations.tsv",
+        "driver_genes_all_phenotypes": src / "gene_level_BN/driver_genes_all_phenotypes.tsv",
+        "driver_genes_therapeutic": src / "gene_level_BN/visualizations_therapeutic/driver_genes_therapeutic_summary.tsv",
+        "driver_genes_summary": src / "gene_level_BN/visualizations_gene_symbols/driver_genes_summary.tsv",
+    }
+    for key, path in table_sources.items():
+        if copy_file(path, dst / "tables" / path.name):
+            manifest["tables"][key] = str((dst / "tables" / path.name).relative_to(DATA_ROOT))
+
+    module_target_dir = spec.get("module_target_dir", TARGET_DIR)
+    module_details = spec.get("module_details", DEFAULT_MODULE_DETAILS)
+    module_ann = build_module_target_snapshot(module_target_dir, module_details)
+    module_ann_path = dst / "tables" / "module_target_summary.tsv"
+    module_ann_path.parent.mkdir(parents=True, exist_ok=True)
+    module_ann.to_csv(module_ann_path, sep="\t", index=False)
+    manifest["module_annotations"] = str(module_ann_path.relative_to(DATA_ROOT))
+
+    for run_dir in sorted((src / "cinderella_final").glob("PHENO_*")):
+        bundle = write_edge_bundle(run_dir, dst / "module_runs" / run_dir.name)
+        if bundle is None:
+            continue
+        bundle["id"] = run_dir.name
+        manifest["module_runs"].append(bundle)
+
+    manifest["gene_runs"] = copy_gene_runs(src, dst)
+    (dst / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    return manifest
+
+
+def write_target_snapshot() -> None:
+    dst = DATA_ROOT / "target_annotations"
+    dst.mkdir(parents=True, exist_ok=True)
+
+    gene_ann = pd.read_csv(TARGET_DIR / "gene_target_annotations.tsv", sep="\t", low_memory=False)
+    keep_gene_cols = [
+        "ensembl_gene_id_base",
+        "hgnc_symbol",
+        "hgnc_name",
+        "open_targets_ad_score",
+        "open_targets_ad_datasources",
+        "is_kinase",
+        "is_gPCR",
+        "is_ion_channel",
+        "is_nuclear_receptor",
+        "is_transporter",
+        "is_enzyme",
+        "is_receptor",
+        "is_transcription_factor",
+        "is_known_drug_target",
+        "has_ad_evidence",
+        "target_categories",
+        "therapeutic_target_score",
+    ]
+    gene_ann = gene_ann[[c for c in keep_gene_cols if c in gene_ann.columns]].copy()
+    gene_ann.to_csv(dst / "gene_target_annotations_compact.tsv", sep="\t", index=False)
+
+    cluster = build_module_target_snapshot(TARGET_DIR, DEFAULT_MODULE_DETAILS)
     cluster.to_csv(dst / "module_target_summary_level4.tsv", sep="\t", index=False)
 
 

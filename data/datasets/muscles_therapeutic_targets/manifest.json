@@ -412,5 +412,6 @@
     "selected_modules": "datasets/muscles_therapeutic_targets/tables/reduced_modules_table.tsv",
     "all_module_phenotype_correlations": "datasets/muscles_therapeutic_targets/tables/all_module_phenotype_correlations.tsv",
     "driver_genes_all_phenotypes": "datasets/muscles_therapeutic_targets/tables/driver_genes_all_phenotypes.tsv"
-  }
+  },
+  "module_annotations": "datasets/muscles_therapeutic_targets/tables/module_target_summary.tsv"
 }

@@ -538,5 +538,6 @@
     "normality": "datasets/signed_80/tables/normality_test_results.tsv",
     "selected_modules": "datasets/signed_80/tables/reduced_modules_table.tsv",
     "driver_genes_summary": "datasets/signed_80/tables/driver_genes_summary.tsv"
-  }
+  },
+  "module_annotations": "datasets/signed_80/tables/module_target_summary.tsv"
 }

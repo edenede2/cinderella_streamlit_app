@@ -401,5 +401,6 @@
     "all_module_phenotype_correlations": "datasets/therapeutic_targets/tables/all_module_phenotype_correlations.tsv",
     "driver_genes_all_phenotypes": "datasets/therapeutic_targets/tables/driver_genes_all_phenotypes.tsv",
     "driver_genes_therapeutic": "datasets/therapeutic_targets/tables/driver_genes_therapeutic_summary.tsv"
-  }
+  },
+  "module_annotations": "datasets/therapeutic_targets/tables/module_target_summary.tsv"
 }

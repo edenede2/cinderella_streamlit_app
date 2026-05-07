@@ -431,6 +431,35 @@ def module_tissue_options(module_ann: pd.DataFrame) -> list[str]:
     return sorted(values)
 
 
+def module_tissue_count_columns(module_ann: pd.DataFrame) -> list[str]:
+    return [tissue for tissue in module_tissue_options(module_ann) if tissue in module_ann.columns]
+
+
+def order_module_table_columns(table: pd.DataFrame, module_ann: pd.DataFrame) -> pd.DataFrame:
+    tissue_cols = module_tissue_count_columns(module_ann)
+    tissue_frac_cols = [f"frac_{tissue}" for tissue in tissue_cols if f"frac_{tissue}" in table.columns]
+    priority = [
+        "Gene",
+        "module_id",
+        "module_type",
+        "selection_rank",
+        "selected_by",
+        "cluster_id",
+        "unique_genes",
+        "tissues",
+        "cluster_size",
+        "original_cluster_type",
+        "dominant_tissue",
+        "max_tissue_fraction",
+        "cluster_tissue_class_095",
+        *tissue_cols,
+        *tissue_frac_cols,
+    ]
+    ordered = [col for col in priority if col in table.columns]
+    ordered.extend(col for col in table.columns if col not in ordered)
+    return table[ordered]
+
+
 def node_condition_controls(prefix: str, nodes: pd.DataFrame, is_gene_level: bool, module_ann: pd.DataFrame | None = None) -> dict:
     with st.expander("Node marking and filtering", expanded=False):
         action = st.radio(
@@ -1319,10 +1348,13 @@ def run_module_view(manifest: dict, category_key: str | None, module_ann: pd.Dat
     c3.metric("Edges above threshold", f"{int((edges['frequency'] >= threshold).sum()):,}")
     c4.metric("Marked nodes", f"{len(marked):,}")
     ts_ct_counts = module_cluster_counts(nodes, module_ann)
+    tissue_labels = module_tissue_options(module_ann)
+    tissue_label_text = ", ".join(tissue_labels) if tissue_labels else "not available"
     st.caption(
         f"Module colors: blue = tissue specific (single-tissue fraction >= 0.95; n={ts_ct_counts['Tissue specific']}), "
         f"red = cross tissue (n={ts_ct_counts['Cross tissue']}). "
-        f"Amber outline = selected sidebar annotation. Unknown annotation: {ts_ct_counts['Unknown']}."
+        f"Amber outline = selected sidebar annotation. Unknown annotation: {ts_ct_counts['Unknown']}. "
+        f"Tissue labels: {tissue_label_text}."
     )
 
     renderer = st.radio("Network renderer", ["Plotly", "Draggable nodes"], horizontal=True, key="module_renderer")
@@ -1369,6 +1401,7 @@ def run_module_view(manifest: dict, category_key: str | None, module_ann: pd.Dat
             table = load_tsv(manifest["tables"][table_key]).copy()
             if "module_id" in table.columns:
                 table = table.merge(module_ann, left_on="module_id", right_on="cluster_id", how="left")
+                table = order_module_table_columns(table, module_ann)
             st.dataframe(table, use_container_width=True, height=500)
         else:
             st.info("No selection table was available in this snapshot.")
@@ -1499,6 +1532,14 @@ def render_source_info() -> None:
         )
 
 
+def load_module_annotations(manifest: dict, index: dict) -> pd.DataFrame:
+    path = manifest.get("module_annotations", index["target_annotations"]["modules"])
+    module_ann = load_tsv(path)
+    if "cluster_id" in module_ann.columns:
+        module_ann["cluster_id"] = pd.to_numeric(module_ann["cluster_id"], errors="coerce").astype("Int64")
+    return module_ann
+
+
 def main() -> None:
     if not (DATA_ROOT / "index.json").exists():
         st.error("Missing data/index.json. Run `python scripts/prepare_data.py` first.")
@@ -1506,9 +1547,6 @@ def main() -> None:
 
     index = load_index()
     gene_ann = load_gene_annotations(index["target_annotations"]["genes"])
-    module_ann = load_tsv(index["target_annotations"]["modules"])
-    if "cluster_id" in module_ann.columns:
-        module_ann["cluster_id"] = pd.to_numeric(module_ann["cluster_id"], errors="coerce").astype("Int64")
 
     dataset_options = {item["label"]: item for item in index["datasets"]}
     with st.sidebar:
@@ -1520,6 +1558,7 @@ def main() -> None:
         ad_threshold = st.slider("Open Targets AD score threshold", 0.0, 1.0, 0.05, 0.005)
 
     manifest = load_manifest(dataset_options[dataset_label]["manifest"])
+    module_ann = load_module_annotations(manifest, index)
 
     st.title("CINDERellA Bayesian Network Results")
     st.caption(manifest["source_path"])

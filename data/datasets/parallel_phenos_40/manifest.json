@@ -110,5 +110,6 @@
     "all_phenotypes_edge_summary": "datasets/parallel_phenos_40/tables/all_phenotypes_edge_summary.tsv",
     "normality": "datasets/parallel_phenos_40/tables/normality_test_results.tsv",
     "selected_modules": "datasets/parallel_phenos_40/tables/reduced_modules_table.tsv"
-  }
+  },
+  "module_annotations": "datasets/parallel_phenos_40/tables/module_target_summary.tsv"
 }
