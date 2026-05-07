@@ -208,7 +208,6 @@ def write_target_snapshot() -> None:
 
     cluster = pd.read_csv(TARGET_DIR / "se2_cluster_target_summary_level4.tsv", sep="\t", low_memory=False)
     details = pd.read_csv(SOURCE_ROOT / "se2_details_filtered_4.csv")
-    tissue_cols = [col for col in ["AC", "MFBA9BA46", "PCGBA23"] if col in details.columns]
     details = details.rename(
         columns={
             "Cluster ID": "cluster_id",
@@ -217,11 +216,23 @@ def write_target_snapshot() -> None:
             "Dominant Tissue": "dominant_tissue",
         }
     )
+    detail_metadata_cols = {
+        "cluster_id",
+        "cluster_size",
+        "original_cluster_type",
+        "dominant_tissue",
+    }
+    tissue_cols = []
+    for col in details.columns:
+        if col in detail_metadata_cols:
+            continue
+        numeric = pd.to_numeric(details[col], errors="coerce")
+        if numeric.notna().any() and numeric.fillna(0).ge(0).all():
+            tissue_cols.append(col)
     for col in tissue_cols:
         details[col] = pd.to_numeric(details[col], errors="coerce").fillna(0)
-    details["max_tissue_fraction"] = details[tissue_cols].max(axis=1) / pd.to_numeric(
-        details["cluster_size"], errors="coerce"
-    ).replace(0, pd.NA)
+    cluster_size = pd.to_numeric(details["cluster_size"], errors="coerce").replace(0, pd.NA)
+    details["max_tissue_fraction"] = details[tissue_cols].max(axis=1) / cluster_size if tissue_cols else pd.NA
     details["is_tissue_specific_095"] = details["max_tissue_fraction"].fillna(0).ge(0.95)
     details["cluster_tissue_class_095"] = details["is_tissue_specific_095"].map(
         {True: "Tissue specific", False: "Cross tissue"}
@@ -250,12 +261,8 @@ def write_target_snapshot() -> None:
         "max_tissue_fraction",
         "is_tissue_specific_095",
         "cluster_tissue_class_095",
-        "AC",
-        "MFBA9BA46",
-        "PCGBA23",
-        "frac_AC",
-        "frac_MFBA9BA46",
-        "frac_PCGBA23",
+        *tissue_cols,
+        *[f"frac_{col}" for col in tissue_cols],
         "n_kinase",
         "frac_kinase",
         "n_GPCR",

@@ -52,10 +52,7 @@ DATASET_SOURCES = [
     },
 ]
 
-TISSUE_COLORS = {
-    "AC": "#1f77b4",
-    "MFBA9BA46": "#2ca02c",
-    "PCGBA23": "#ff7f0e",
+NODE_COLORS = {
     "phenotype": "#7b3f9b",
     "module": "#607d8b",
     "tissue_specific_cluster": "#2563eb",
@@ -64,6 +61,19 @@ TISSUE_COLORS = {
     "filter": "#111827",
     "default": "#78909c",
 }
+
+TISSUE_PALETTE = [
+    "#1f77b4",
+    "#2ca02c",
+    "#ff7f0e",
+    "#9467bd",
+    "#8c564b",
+    "#e377c2",
+    "#17becf",
+    "#bcbd22",
+    "#d62728",
+    "#7f7f7f",
+]
 
 
 st.set_page_config(page_title="CINDERellA Results", layout="wide")
@@ -122,6 +132,10 @@ def tissue_from_raw(raw_name: str) -> str:
 def available_tissues(nodes: pd.DataFrame) -> list[str]:
     values = sorted({tissue_from_raw(raw) for raw in nodes["raw_name"].astype(str) if tissue_from_raw(raw)})
     return values
+
+
+def tissue_color_map(nodes: pd.DataFrame) -> dict[str, str]:
+    return {tissue: TISSUE_PALETTE[idx % len(TISSUE_PALETTE)] for idx, tissue in enumerate(available_tissues(nodes))}
 
 
 def display_gene_label(raw_name: str, gene_ann: pd.DataFrame) -> str:
@@ -375,7 +389,10 @@ def module_is_tissue_specific(ann: pd.Series | None) -> bool | None:
         return bool(value)
     if "max_tissue_fraction" in ann and pd.notna(ann["max_tissue_fraction"]):
         return float(ann["max_tissue_fraction"]) >= 0.95
-    tissue_counts = [float(ann.get(col, 0.0) or 0.0) for col in ["AC", "MFBA9BA46", "PCGBA23"]]
+    tissue_names = []
+    if "tissues" in ann and pd.notna(ann.get("tissues")):
+        tissue_names = [tissue for tissue in str(ann.get("tissues")).split(";") if tissue]
+    tissue_counts = [float(ann.get(col, 0.0) or 0.0) for col in tissue_names if col in ann]
     total = sum(tissue_counts)
     return max(tissue_counts) / total >= 0.95 if total else None
 
@@ -383,8 +400,8 @@ def module_is_tissue_specific(ann: pd.Series | None) -> bool | None:
 def module_cluster_color(ann: pd.Series | None) -> str:
     is_specific = module_is_tissue_specific(ann)
     if is_specific is None:
-        return TISSUE_COLORS["module"]
-    return TISSUE_COLORS["tissue_specific_cluster"] if is_specific else TISSUE_COLORS["cross_tissue_cluster"]
+        return NODE_COLORS["module"]
+    return NODE_COLORS["tissue_specific_cluster"] if is_specific else NODE_COLORS["cross_tissue_cluster"]
 
 
 def module_cluster_counts(nodes: pd.DataFrame, module_ann: pd.DataFrame) -> dict[str, int]:
@@ -405,7 +422,16 @@ def module_cluster_counts(nodes: pd.DataFrame, module_ann: pd.DataFrame) -> dict
     return counts
 
 
-def node_condition_controls(prefix: str, nodes: pd.DataFrame, is_gene_level: bool) -> dict:
+def module_tissue_options(module_ann: pd.DataFrame) -> list[str]:
+    if "tissues" not in module_ann:
+        return []
+    values: set[str] = set()
+    for tissue_text in module_ann["tissues"].dropna().astype(str):
+        values.update(tissue for tissue in tissue_text.split(";") if tissue)
+    return sorted(values)
+
+
+def node_condition_controls(prefix: str, nodes: pd.DataFrame, is_gene_level: bool, module_ann: pd.DataFrame | None = None) -> dict:
     with st.expander("Node marking and filtering", expanded=False):
         action = st.radio(
             "Condition action",
@@ -441,7 +467,7 @@ def node_condition_controls(prefix: str, nodes: pd.DataFrame, is_gene_level: boo
         min_to_pheno_fraction = 0.0
         min_from_pheno_fraction = 0.0
         if not is_gene_level:
-            module_tissues = st.multiselect("Module contains tissue label", ["AC", "MFBA9BA46", "PCGBA23"], key=f"{prefix}_module_tissues")
+            module_tissues = st.multiselect("Module contains tissue label", module_tissue_options(module_ann) if module_ann is not None else [], key=f"{prefix}_module_tissues")
             min_category_fraction = st.slider("Minimum selected-category gene fraction in module", 0.0, 1.0, 0.0, 0.01, key=f"{prefix}_min_cat_frac")
             min_to_pheno_fraction = st.slider("Minimum outgoing-weight fraction to phenotype nodes", 0.0, 1.0, 0.0, 0.01, key=f"{prefix}_to_pheno_frac")
             min_from_pheno_fraction = st.slider("Minimum incoming-weight fraction from phenotype nodes", 0.0, 1.0, 0.0, 0.01, key=f"{prefix}_from_pheno_frac")
@@ -590,6 +616,7 @@ def add_network_legend(
     category: str | None,
     is_gene_level: bool,
     marked_ids: set[int],
+    tissue_colors: dict[str, str],
 ) -> None:
     if is_gene_level:
         if any(attrs["is_phenotype"] for _, attrs in graph.nodes(data=True)):
@@ -598,7 +625,7 @@ def add_network_legend(
                     x=[None],
                     y=[None],
                     mode="markers",
-                    marker=dict(size=12, color=TISSUE_COLORS["phenotype"], symbol="diamond"),
+                    marker=dict(size=12, color=NODE_COLORS["phenotype"], symbol="diamond"),
                     name="Phenotype",
                     hoverinfo="skip",
                 )
@@ -609,7 +636,7 @@ def add_network_legend(
                     x=[None],
                     y=[None],
                     mode="markers",
-                    marker=dict(size=12, color=TISSUE_COLORS.get(tissue, TISSUE_COLORS["default"])),
+                    marker=dict(size=12, color=tissue_colors.get(tissue, NODE_COLORS["default"])),
                     name=f"Gene tissue: {tissue}",
                     hoverinfo="skip",
                 )
@@ -621,7 +648,7 @@ def add_network_legend(
                     x=[None],
                     y=[None],
                     mode="markers",
-                    marker=dict(size=12, color=TISSUE_COLORS["tissue_specific_cluster"]),
+                    marker=dict(size=12, color=NODE_COLORS["tissue_specific_cluster"]),
                     name="Tissue specific module",
                     hoverinfo="skip",
                 )
@@ -631,7 +658,7 @@ def add_network_legend(
                     x=[None],
                     y=[None],
                     mode="markers",
-                    marker=dict(size=12, color=TISSUE_COLORS["cross_tissue_cluster"]),
+                    marker=dict(size=12, color=NODE_COLORS["cross_tissue_cluster"]),
                     name="Cross tissue module",
                     hoverinfo="skip",
                 )
@@ -643,7 +670,7 @@ def add_network_legend(
                 x=[None],
                 y=[None],
                 mode="markers",
-                marker=dict(size=12, color=TISSUE_COLORS["highlight"], line=dict(width=2, color=TISSUE_COLORS["highlight"])),
+                marker=dict(size=12, color="#ffffff", line=dict(width=3, color=NODE_COLORS["highlight"])),
                 name=f"Selected annotation: {CATEGORY_LABEL_BY_GENE.get(category, category)}",
                 hoverinfo="skip",
             )
@@ -654,7 +681,7 @@ def add_network_legend(
                 x=[None],
                 y=[None],
                 mode="markers",
-                marker=dict(size=12, color=TISSUE_COLORS["filter"]),
+                marker=dict(size=12, color="#ffffff", line=dict(width=3, color=NODE_COLORS["filter"])),
                 name="Marked by node filters",
                 hoverinfo="skip",
             )
@@ -685,6 +712,7 @@ def build_network_figure(
 
     keep_ids = set(edges["source_id"].astype(int)) | set(edges["target_id"].astype(int))
     nodes = nodes[nodes["node_id"].astype(int).isin(keep_ids)].copy()
+    tissue_colors = tissue_color_map(nodes)
 
     graph = nx.DiGraph()
     for _, row in nodes.iterrows():
@@ -765,7 +793,7 @@ def build_network_figure(
 
         if is_pheno:
             label = clean_phenotype(pretty)
-            color = TISSUE_COLORS["phenotype"]
+            color = NODE_COLORS["phenotype"]
             size = 34
             symbol = "diamond"
             hover = f"<b>{label}</b><br>Phenotype"
@@ -797,7 +825,7 @@ def build_network_figure(
         else:
             label = display_gene_label(raw, gene_ann)
             tissue = tissue_from_raw(raw)
-            color = TISSUE_COLORS.get(tissue, TISSUE_COLORS["default"])
+            color = tissue_colors.get(tissue, NODE_COLORS["default"])
             size = 18
             symbol = "circle"
             base = gene_base(raw)
@@ -810,7 +838,6 @@ def build_network_figure(
                 hover += "<br>" + "<br>".join(category_hover_lines_for_gene(ann, ad_threshold))
                 if category and category_value(ann, category, ad_threshold):
                     category_match = True
-                    color = TISSUE_COLORS["highlight"]
                     size = 24
 
         if metric is not None:
@@ -823,7 +850,6 @@ def build_network_figure(
             hover += f"<br>{source_label}: {attrs['source_runs']}"
         if node_id in marked_ids:
             hover += "<br><b>Matches selected node conditions</b>"
-            color = TISSUE_COLORS["filter"]
             size = max(size, 28)
 
         labels.append(label)
@@ -832,7 +858,12 @@ def build_network_figure(
         sizes.append(size)
         symbols.append(symbol)
         line_widths.append(3.6 if node_id in marked_ids or category_match else 1.5)
-        line_colors.append(TISSUE_COLORS["highlight"] if category_match else "#ffffff")
+        if node_id in marked_ids:
+            line_colors.append(NODE_COLORS["filter"])
+        elif category_match:
+            line_colors.append(NODE_COLORS["highlight"])
+        else:
+            line_colors.append("#ffffff")
 
     fig = go.Figure()
     fig.add_trace(
@@ -876,7 +907,7 @@ def build_network_figure(
             showlegend=False,
         )
     )
-    add_network_legend(fig, nodes, graph, category, is_gene_level, marked_ids)
+    add_network_legend(fig, nodes, graph, category, is_gene_level, marked_ids, tissue_colors)
     fig.update_layout(
         title=title,
         height=720,
@@ -910,6 +941,7 @@ def draggable_network_html(
     edges = edges.sort_values("frequency", ascending=False).head(max_edges)
     keep_ids = set(edges["source_id"].astype(int)) | set(edges["target_id"].astype(int))
     nodes = nodes[nodes["node_id"].astype(int).isin(keep_ids)].copy()
+    tissue_colors = tissue_color_map(nodes)
 
     graph = nx.DiGraph()
     for _, row in nodes.iterrows():
@@ -949,7 +981,7 @@ def draggable_network_html(
 
         if is_pheno:
             label = clean_phenotype(pretty)
-            color = TISSUE_COLORS["phenotype"]
+            color = NODE_COLORS["phenotype"]
             shape = "diamond"
             size = 24
             title = f"<b>{label}</b><br>Phenotype"
@@ -976,7 +1008,7 @@ def draggable_network_html(
         else:
             label = display_gene_label(raw, gene_ann)
             tissue = tissue_from_raw(raw)
-            color = TISSUE_COLORS.get(tissue, TISSUE_COLORS["default"])
+            color = tissue_colors.get(tissue, NODE_COLORS["default"])
             shape = "dot"
             size = 17
             ann = gene_annotation_row(raw, gene_ann)
@@ -987,9 +1019,8 @@ def draggable_network_html(
                 if category and category_value(ann, category, ad_threshold):
                     category_match = True
                     size = 22
-                    color = TISSUE_COLORS["highlight"]
         if category_match:
-            border_color = TISSUE_COLORS["highlight"]
+            border_color = NODE_COLORS["highlight"]
 
         if metric is not None:
             title += (
@@ -1001,7 +1032,7 @@ def draggable_network_html(
             title += f"<br>{source_label}: {attrs['source_runs']}"
         if node_id in marked_ids:
             title += "<br><b>Matches selected node conditions</b>"
-            color = TISSUE_COLORS["filter"]
+            border_color = NODE_COLORS["filter"]
             size = max(size, 25)
 
         x, y = pos[node_id]
@@ -1014,7 +1045,7 @@ def draggable_network_html(
             "y": float(y * 650),
             "size": size,
             "shape": shape,
-            "borderWidth": 3 if category_match else 1.5,
+            "borderWidth": 3 if category_match or node_id in marked_ids else 1.5,
             "color": {"background": color, "border": border_color, "highlight": {"background": color, "border": "#111827"}},
             "font": {"size": 15 if is_pheno else 13, "face": "Arial", "color": "#111827"},
         }
@@ -1279,7 +1310,7 @@ def run_module_view(manifest: dict, category_key: str | None, module_ann: pd.Dat
 
     threshold = st.slider("Edge frequency threshold", 0.0, 1.0, 0.05, 0.005, key="module_threshold")
     max_edges = st.slider("Maximum displayed edges", 25, 700, 220, 25, key="module_max_edges")
-    conditions = node_condition_controls("module", nodes, is_gene_level=False)
+    conditions = node_condition_controls("module", nodes, is_gene_level=False, module_ann=module_ann)
     nodes, edges, marked = prepare_network_for_view(nodes, edges, threshold, conditions, gene_ann, module_ann, ad_threshold, is_gene_level=False)
 
     c1, c2, c3, c4 = st.columns(4)
@@ -1380,11 +1411,11 @@ def run_gene_view(manifest: dict, category_key: str | None, module_ann: pd.DataF
     c2.metric("Edges", f"{len(edges):,}")
     c3.metric("Edges above threshold", f"{int((edges['frequency'] >= threshold).sum()):,}")
     c4.metric("Marked nodes", f"{len(marked):,}")
-    tissues = available_tissues(nodes)
-    tissue_text = ", ".join(f"{tissue} = {TISSUE_COLORS.get(tissue, TISSUE_COLORS['default'])}" for tissue in tissues) or "none"
+    tissue_colors = tissue_color_map(nodes)
+    tissue_text = ", ".join(f"{tissue} = {color}" for tissue, color in tissue_colors.items()) or "none"
     st.caption(
         f"Gene colors: phenotype = purple diamond; tissues: {tissue_text}. "
-        "Amber = selected sidebar annotation; black = marked by node filters."
+        "Amber outline = selected sidebar annotation; black outline = marked by node filters."
     )
 
     renderer = st.radio("Network renderer", ["Plotly", "Draggable nodes"], horizontal=True, key="gene_renderer")
