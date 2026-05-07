@@ -27,6 +27,10 @@ SOURCE_DATASETS = {
         "label": "Signed 80-module run",
         "path": EDEN / "CINDERellA/notebooks/results/se2_4_signed_80",
     },
+    "muscles_therapeutic_targets": {
+        "label": "Muscle tissues therapeutic target selected modules",
+        "path": EDEN / "CINDERellA/notebooks/results/se2_3_muscles_parallel_phenos_therapeutic_targets",
+    },
 }
 
 TARGET_DIR = (

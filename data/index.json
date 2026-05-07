@@ -14,6 +14,11 @@
       "slug": "signed_80",
       "label": "Signed 80-module run",
       "manifest": "datasets/signed_80/manifest.json"
+    },
+    {
+      "slug": "muscles_therapeutic_targets",
+      "label": "Muscle tissues therapeutic target selected modules",
+      "manifest": "datasets/muscles_therapeutic_targets/manifest.json"
     }
   ],
   "target_annotations": {
