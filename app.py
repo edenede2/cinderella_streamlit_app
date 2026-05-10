@@ -57,7 +57,7 @@ NODE_COLORS = {
     "module": "#607d8b",
     "tissue_specific_cluster": "#2563eb",
     "cross_tissue_cluster": "#dc2626",
-    "highlight": "#f59e0b",
+    "therapeutic_outline": "#ef4444",
     "filter": "#111827",
     "default": "#78909c",
 }
@@ -699,7 +699,7 @@ def add_network_legend(
                 x=[None],
                 y=[None],
                 mode="markers",
-                marker=dict(size=12, color="#ffffff", line=dict(width=3, color=NODE_COLORS["highlight"])),
+                marker=dict(size=16, symbol="circle-open", color=NODE_COLORS["therapeutic_outline"], line=dict(width=3)),
                 name=f"Selected annotation: {CATEGORY_LABEL_BY_GENE.get(category, category)}",
                 hoverinfo="skip",
             )
@@ -809,6 +809,7 @@ def build_network_figure(
         )
 
     node_x, node_y, labels, hovers, colors, sizes, symbols, line_widths, line_colors = [], [], [], [], [], [], [], [], []
+    therapeutic_x, therapeutic_y, therapeutic_sizes = [], [], []
     metrics = edge_metrics(nodes, edges, threshold)
     for node_id, attrs in graph.nodes(data=True):
         x, y = pos[node_id]
@@ -850,7 +851,6 @@ def build_network_figure(
                     count = float(ann.get(MODULE_COUNT_BY_GENE.get(category), 0.0) or 0.0)
                     if count > 0:
                         category_match = True
-                        size = 27
         else:
             label = display_gene_label(raw, gene_ann)
             tissue = tissue_from_raw(raw)
@@ -867,7 +867,6 @@ def build_network_figure(
                 hover += "<br>" + "<br>".join(category_hover_lines_for_gene(ann, ad_threshold))
                 if category and category_value(ann, category, ad_threshold):
                     category_match = True
-                    size = 24
 
         if metric is not None:
             hover += (
@@ -886,13 +885,15 @@ def build_network_figure(
         colors.append(color)
         sizes.append(size)
         symbols.append(symbol)
-        line_widths.append(3.6 if node_id in marked_ids or category_match else 1.5)
+        line_widths.append(3.6 if node_id in marked_ids else 1.5)
         if node_id in marked_ids:
             line_colors.append(NODE_COLORS["filter"])
-        elif category_match:
-            line_colors.append(NODE_COLORS["highlight"])
         else:
             line_colors.append("#ffffff")
+        if category_match:
+            therapeutic_x.append(x)
+            therapeutic_y.append(y)
+            therapeutic_sizes.append(size + 12)
 
     fig = go.Figure()
     fig.add_trace(
@@ -913,6 +914,22 @@ def build_network_figure(
                 mode="text",
                 text=edge_text,
                 textfont=dict(size=10, color="#334155"),
+                hoverinfo="skip",
+                showlegend=False,
+            )
+        )
+    if therapeutic_x:
+        fig.add_trace(
+            go.Scatter(
+                x=therapeutic_x,
+                y=therapeutic_y,
+                mode="markers",
+                marker=dict(
+                    size=therapeutic_sizes,
+                    symbol="circle-open",
+                    color=NODE_COLORS["therapeutic_outline"],
+                    line=dict(width=3, color=NODE_COLORS["therapeutic_outline"]),
+                ),
                 hoverinfo="skip",
                 showlegend=False,
             )
@@ -1033,7 +1050,6 @@ def draggable_network_html(
                 title += "<br>" + "<br>".join(category_hover_lines_for_module(ann, ad_threshold))
                 if category and float(ann.get(MODULE_COUNT_BY_GENE.get(category), 0.0) or 0.0) > 0:
                     category_match = True
-                    size = 24
         else:
             label = display_gene_label(raw, gene_ann)
             tissue = tissue_from_raw(raw)
@@ -1047,9 +1063,8 @@ def draggable_network_html(
                 title += "<br>" + "<br>".join(category_hover_lines_for_gene(ann, ad_threshold))
                 if category and category_value(ann, category, ad_threshold):
                     category_match = True
-                    size = 22
         if category_match:
-            border_color = NODE_COLORS["highlight"]
+            border_color = NODE_COLORS["therapeutic_outline"]
 
         if metric is not None:
             title += (
@@ -1061,7 +1076,8 @@ def draggable_network_html(
             title += f"<br>{source_label}: {attrs['source_runs']}"
         if node_id in marked_ids:
             title += "<br><b>Matches selected node conditions</b>"
-            border_color = NODE_COLORS["filter"]
+            if not category_match:
+                border_color = NODE_COLORS["filter"]
             size = max(size, 25)
 
         x, y = pos[node_id]
@@ -1074,7 +1090,7 @@ def draggable_network_html(
             "y": float(y * 650),
             "size": size,
             "shape": shape,
-            "borderWidth": 3 if category_match or node_id in marked_ids else 1.5,
+            "borderWidth": 5 if category_match else (3 if node_id in marked_ids else 1.5),
             "color": {"background": color, "border": border_color, "highlight": {"background": color, "border": "#111827"}},
             "font": {"size": 15 if is_pheno else 13, "face": "Arial", "color": "#111827"},
         }
@@ -1138,7 +1154,7 @@ def draggable_network_html(
         <div id="toolbar">
           <button onclick="network.fit({{animation: true}})">Fit</button>
           <button onclick="network.stabilize(80)">Re-layout</button>
-          <span>Select nodes with click or drag a node to reposition it. Amber marks the selected sidebar annotation.</span>
+          <span>Select nodes with click or drag a node to reposition it. A red circle marks the selected therapeutic annotation.</span>
         </div>
         <div id="layout">
           <div id="network"></div>
@@ -1353,7 +1369,7 @@ def run_module_view(manifest: dict, category_key: str | None, module_ann: pd.Dat
     st.caption(
         f"Module colors: blue = tissue specific (single-tissue fraction >= 0.95; n={ts_ct_counts['Tissue specific']}), "
         f"red = cross tissue (n={ts_ct_counts['Cross tissue']}). "
-        f"Amber outline = selected sidebar annotation. Unknown annotation: {ts_ct_counts['Unknown']}. "
+        f"Red circle outline = selected therapeutic annotation. Unknown annotation: {ts_ct_counts['Unknown']}. "
         f"Tissue labels: {tissue_label_text}."
     )
 
@@ -1448,7 +1464,7 @@ def run_gene_view(manifest: dict, category_key: str | None, module_ann: pd.DataF
     tissue_text = ", ".join(f"{tissue} = {color}" for tissue, color in tissue_colors.items()) or "none"
     st.caption(
         f"Gene colors: phenotype = purple diamond; tissues: {tissue_text}. "
-        "Amber outline = selected sidebar annotation; black outline = marked by node filters."
+        "Red circle outline = selected therapeutic annotation; black outline = marked by node filters."
     )
 
     renderer = st.radio("Network renderer", ["Plotly", "Draggable nodes"], horizontal=True, key="gene_renderer")
