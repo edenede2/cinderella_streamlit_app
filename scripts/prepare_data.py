@@ -28,10 +28,16 @@ SOURCE_DATASETS = {
         "path": EDEN / "CINDERellA/notebooks/results/se2_4_signed_80",
     },
     "muscles_therapeutic_targets": {
-        "label": "Muscle tissues therapeutic target selected modules",
-        "path": EDEN / "CINDERellA/notebooks/results/se2_3_muscles_parallel_phenos_therapeutic_targets",
+        "label": "Muscle L4 therapeutic target selected modules",
+        "path": EDEN / "CINDERellA/notebooks/results/muscles_l4_parallel_phenos_therapeutic_targets",
         "module_target_dir": EDEN / "inter-tissue-CoExpression/data/proccessed/M5_all_genes_muscles/target_annotations",
         "module_details": EDEN / "inter-tissue-CoExpression/data/proccessed/M5_all_genes_muscles/M5_all_genes_details_4.csv",
+    },
+    "brain_control_therapeutic_targets": {
+        "label": "Brain control L4 therapeutic target selected modules",
+        "path": EDEN / "CINDERellA/notebooks/results/se2_4_brain_control_parallel_phenos_therapeutic_targets",
+        "module_target_dir": EDEN / "inter-tissue-CoExpression/data/proccessed/se2_signed_alt_control_filtered/se2_rosmap_control_signed-alt/target_annotations",
+        "module_details": EDEN / "inter-tissue-CoExpression/data/proccessed/se2_signed_alt_control_filtered/se2_rosmap_control_signed-alt/speakeasy_clusters_details_level_4_filtered.csv",
     },
 }
 
@@ -234,6 +240,8 @@ def build_module_target_snapshot(target_dir: Path, details_path: Path) -> pd.Dat
 def copy_dataset(slug: str, spec: dict) -> dict:
     src = spec["path"]
     dst = DATA_ROOT / "datasets" / slug
+    if dst.exists():
+        shutil.rmtree(dst)
     dst.mkdir(parents=True, exist_ok=True)
 
     manifest = {
@@ -282,7 +290,6 @@ def write_target_snapshot() -> None:
     dst = DATA_ROOT / "target_annotations"
     dst.mkdir(parents=True, exist_ok=True)
 
-    gene_ann = pd.read_csv(TARGET_DIR / "gene_target_annotations.tsv", sep="\t", low_memory=False)
     keep_gene_cols = [
         "ensembl_gene_id_base",
         "hgnc_symbol",
@@ -302,7 +309,29 @@ def write_target_snapshot() -> None:
         "target_categories",
         "therapeutic_target_score",
     ]
-    gene_ann = gene_ann[[c for c in keep_gene_cols if c in gene_ann.columns]].copy()
+
+    gene_ann_sources = [TARGET_DIR / "gene_target_annotations.tsv"]
+    for spec in SOURCE_DATASETS.values():
+        target_dir = spec.get("module_target_dir")
+        if target_dir is not None:
+            gene_ann_sources.append(Path(target_dir) / "gene_target_annotations.tsv")
+
+    gene_ann_parts = []
+    for path in dict.fromkeys(gene_ann_sources):
+        if not path.exists():
+            continue
+        part = pd.read_csv(path, sep="\t", low_memory=False)
+        part = part[[c for c in keep_gene_cols if c in part.columns]].copy()
+        gene_ann_parts.append(part)
+
+    gene_ann = pd.concat(gene_ann_parts, ignore_index=True) if gene_ann_parts else pd.DataFrame(columns=keep_gene_cols)
+    if "ensembl_gene_id_base" in gene_ann.columns:
+        gene_ann["_score_for_dedupe"] = pd.to_numeric(gene_ann.get("open_targets_ad_score"), errors="coerce").fillna(0)
+        gene_ann = (
+            gene_ann.sort_values("_score_for_dedupe", ascending=False)
+            .drop_duplicates("ensembl_gene_id_base", keep="first")
+            .drop(columns="_score_for_dedupe")
+        )
     gene_ann.to_csv(dst / "gene_target_annotations_compact.tsv", sep="\t", index=False)
 
     cluster = build_module_target_snapshot(TARGET_DIR, DEFAULT_MODULE_DETAILS)

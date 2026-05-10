@@ -17,8 +17,13 @@
     },
     {
       "slug": "muscles_therapeutic_targets",
-      "label": "Muscle tissues therapeutic target selected modules",
+      "label": "Muscle L4 therapeutic target selected modules",
       "manifest": "datasets/muscles_therapeutic_targets/manifest.json"
+    },
+    {
+      "slug": "brain_control_therapeutic_targets",
+      "label": "Brain control L4 therapeutic target selected modules",
+      "manifest": "datasets/brain_control_therapeutic_targets/manifest.json"
     }
   ],
   "target_annotations": {
